@@ -152,6 +152,8 @@ pub async fn check_endpoint(base_url: &str) -> Result<(url::Url, String, Vec<Soc
 }
 
 fn http_client(pin: Option<(&str, &[SocketAddr])>) -> Result<reqwest::Client, AiError> {
+    // Satu penyedia kripto (ring) untuk seluruh proses; aman dipanggil berulang.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -250,7 +252,7 @@ pub async fn stream_turn(
     cancel: &CancellationToken,
     on_event: impl FnMut(Event),
 ) -> Result<Reply, AiError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-endpoint"))]
     if endpoint.base_url.starts_with("http://127.0.0.1:") {
         let url = url::Url::parse(&endpoint.base_url).expect("test url");
         let body = build_body(endpoint, false, system, messages, tools, DEFAULT_MAX_TOKENS);

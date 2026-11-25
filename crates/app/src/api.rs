@@ -29,6 +29,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/router", get(router_info))
         .route("/api/router/refresh", post(refresh))
         .route("/api/audit", get(audit))
+        .route("/api/router/logs", get(router_logs))
+        .route("/api/recommendations", get(recommendations))
+        .route("/api/actions", get(actions))
 }
 
 fn fail(status: StatusCode, message: impl Into<String>) -> Response {
@@ -248,6 +251,61 @@ async fn audit(State(state): State<Shared>) -> Response {
         .await;
     match rows {
         Ok(v) => Json(json!({ "audit": v })).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct LogQuery {
+    limit: Option<u64>,
+    topics: Option<String>,
+}
+
+async fn router_logs(State(state): State<Shared>, Query(q): Query<LogQuery>) -> Response {
+    let mut input = json!({ "limit": q.limit.unwrap_or(50) });
+    if let Some(t) = q.topics.filter(|t| !t.is_empty()) {
+        input["topics"] = json!(t.split(',').collect::<Vec<_>>());
+    }
+    match crate::agent_host::run_tool(&state, "get_logs", &input).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => fail(StatusCode::BAD_GATEWAY, format!("Log gagal dibaca dari MikroTik: {e}")),
+    }
+}
+
+async fn recommendations(State(state): State<Shared>) -> Response {
+    let rows = state
+        .store
+        .run(|c| {
+            let mut s = c.prepare("SELECT id, kind, finding, evidence, status, action_id, created_at FROM recommendations ORDER BY created_at DESC LIMIT 50")?;
+            s.query_map([], |r| {
+                Ok(json!({ "id": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?, "finding": r.get::<_, String>(2)?,
+                           "evidence": r.get::<_, Option<String>>(3)?, "status": r.get::<_, String>(4)?,
+                           "action_id": r.get::<_, Option<String>>(5)?, "created_at": r.get::<_, i64>(6)? }))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .await;
+    match rows {
+        Ok(v) => Json(json!({ "recommendations": v })).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn actions(State(state): State<Shared>) -> Response {
+    let rows = state
+        .store
+        .run(|c| {
+            let mut s = c.prepare("SELECT id, label, risk, placement, created_at, approved_at FROM custom_actions ORDER BY created_at DESC")?;
+            s.query_map([], |r| {
+                Ok(json!({ "id": r.get::<_, String>(0)?, "label": r.get::<_, String>(1)?, "risk": r.get::<_, String>(2)?,
+                           "placement": r.get::<_, Option<String>>(3)?, "created_at": r.get::<_, i64>(4)?,
+                           "approved_at": r.get::<_, Option<i64>>(5)? }))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .await;
+    match rows {
+        Ok(v) => Json(json!({ "actions": v })).into_response(),
         Err(e) => internal(e),
     }
 }

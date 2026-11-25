@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use panel_core::auth::{self, CSRF_HEADER, LoginLimiter, SESSION_COOKIE, Sessions};
@@ -50,7 +50,7 @@ pub fn app(state: Shared) -> Router {
         ));
     Router::new()
         .merge(api)
-        .fallback(get(spa))
+        .fallback(get(crate::web::serve))
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(state)
@@ -232,14 +232,6 @@ async fn health(State(state): State<Shared>) -> Response {
 
 async fn events(State(state): State<Shared>) -> impl IntoResponse {
     state.hub.sse()
-}
-
-/// Sementara: halaman pengganti sampai SPA Preact (tahap 3) ditanam di binary.
-async fn spa() -> Html<&'static str> {
-    Html(
-        "<!doctype html><html lang=\"id\"><meta charset=\"utf-8\"><title>Panel MikroTik</title>\
-         <body><p>Panel MikroTik (Rust) berjalan. Antarmuka baru menyusul di tahap 3.</p></body></html>",
-    )
 }
 
 #[cfg(test)]

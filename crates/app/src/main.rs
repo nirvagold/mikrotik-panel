@@ -10,6 +10,7 @@ mod routeros;
 mod store;
 mod telemetry;
 mod tls;
+mod web;
 
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;

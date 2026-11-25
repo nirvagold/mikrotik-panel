@@ -22,6 +22,9 @@ use crate::store::now;
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/design", get(design))
+        .route("/api/design/default", get(design_default))
+        .route("/api/agent/memories", get(memories))
+        .route("/api/agent/memories/{id}/delete", post(forget_memory))
         .route("/api/design/versions/{id}/revert", post(revert))
         .route("/api/design/apply", post(apply))
         .route("/api/design/discard", post(discard))
@@ -193,6 +196,36 @@ async fn reset(State(st): State<Shared>) -> Response {
             announce(&st, &draft, "reset");
             Json(json!({ "draft": draft })).into_response()
         }
+        Err(err) => internal(err),
+    }
+}
+
+async fn design_default() -> Response {
+    Json(json!({ "spec": default_spec() })).into_response()
+}
+
+async fn memories(State(st): State<Shared>) -> Response {
+    let r = st
+        .store
+        .run(|c| {
+            let mut s = c.prepare("SELECT id, kind, text, source, updated_at FROM agent_memories ORDER BY updated_at DESC LIMIT 200")?;
+            s.query_map([], |r| {
+                Ok(json!({ "id": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?, "text": r.get::<_, String>(2)?,
+                           "source": r.get::<_, Option<String>>(3)?, "updated_at": r.get::<_, i64>(4)? }))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .await;
+    match r {
+        Ok(v) => Json(json!({ "memories": v })).into_response(),
+        Err(err) => internal(err),
+    }
+}
+
+async fn forget_memory(State(st): State<Shared>, Path(id): Path<String>) -> Response {
+    match st.store.run(move |c| c.execute("DELETE FROM agent_memories WHERE id = ?1", [id])).await {
+        Ok(0) => fail(StatusCode::NOT_FOUND, "Memori tidak ditemukan."),
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
         Err(err) => internal(err),
     }
 }

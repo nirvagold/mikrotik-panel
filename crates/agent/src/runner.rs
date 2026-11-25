@@ -19,6 +19,8 @@ use crate::tools::{self, Group, ToolDef};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Proposal {
     pub conversation_id: String,
+    /// ID tool_use dari model; kartu ditampilkan di bawah pesan yang memanggilnya.
+    pub tool_use_id: String,
     pub tool: String,
     pub input: Json,
     pub permission: Permission,
@@ -78,6 +80,7 @@ struct Turn<'a, H: Host> {
     base_version: String,
     spec: DesignSpec,
     design_changed: bool,
+    current_tool_use: String,
 }
 
 /// Jalankan satu giliran admin sampai model selesai, dibatalkan, atau menunggu admin.
@@ -100,7 +103,7 @@ pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, ca
     history.push(user);
 
     let catalog = tools::catalog();
-    let mut turn = Turn { host, conversation, base_version, spec, design_changed: false };
+    let mut turn = Turn { host, conversation, base_version, spec, design_changed: false, current_tool_use: String::new() };
     let mut ended = Ended::StepLimit;
 
     'steps: for _ in 0..MAX_AGENT_STEPS {
@@ -144,6 +147,7 @@ pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, ca
             let outcome = if index >= MAX_TOOL_CALLS_PER_STEP {
                 Err(format!("Maksimal {MAX_TOOL_CALLS_PER_STEP} alat per langkah; panggil sisanya di langkah berikutnya."))
             } else {
+                turn.current_tool_use = id.clone();
                 turn.call(name, input, &mut wait_for_user).await
             };
             let (content, is_error) = match outcome {
@@ -233,7 +237,7 @@ impl<H: Host> Turn<'_, H> {
             }
             "request_publish" => {
                 let id = self.host.propose(Proposal {
-                    conversation_id: self.conversation.into(), tool: tool.name.into(), input: input.clone(),
+                    conversation_id: self.conversation.into(), tool_use_id: self.current_tool_use.clone(), tool: tool.name.into(), input: input.clone(),
                     permission: Permission::Approve, preview: None,
                 }).await?;
                 return Ok(json!({"status": "menunggu_persetujuan", "card": id, "note": "Draft belum aktif sampai admin klik Terapkan."}));
@@ -318,7 +322,7 @@ impl<H: Host> Turn<'_, H> {
             return self.host.run_tool(tool.name, input).await;
         }
         let card = self.host.propose(Proposal {
-            conversation_id: self.conversation.into(), tool: tool.name.into(), input: input.clone(), permission, preview: preview.clone(),
+            conversation_id: self.conversation.into(), tool_use_id: self.current_tool_use.clone(), tool: tool.name.into(), input: input.clone(), permission, preview: preview.clone(),
         }).await?;
         Ok(json!({
             "status": "menunggu_persetujuan",
@@ -410,6 +414,7 @@ mod tests {
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].permission, Permission::Critical);
         assert_eq!(proposals[0].preview.as_deref(), Some("/system reboot"));
+        assert_eq!(proposals[0].tool_use_id, "c");
         assert_eq!(*host.ran.lock().unwrap(), vec!["router_snapshot".to_string()]);
 
         let messages = host.messages.lock().unwrap();

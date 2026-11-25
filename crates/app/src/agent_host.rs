@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use panel_agent::ai::{Endpoint, Message, Protocol};
 use panel_agent::design::{DesignSpec, default_spec};
+use panel_agent::router_tools::{self, RouterApi};
 use panel_agent::runner::{Host, Proposal};
 use panel_core::crypto::{Cipher, random_token};
 use panel_core::policy::Permission;
@@ -508,7 +509,60 @@ pub async fn run_tool(state: &Shared, name: &str, input: &Json) -> Result<Json, 
                 json!({ "results": rows, "note": if rows.is_empty() { "Referensi lokal belum diisi atau tidak ada hasil." } else { "" } }),
             )
         }
+        "get_command_tree" => {
+            let path: Vec<String> = serde_json::from_value(input["path"].clone()).map_err(|_| "path harus daftar teks")?;
+            router_tools::command_tree(&ApiBridge(state), &path).await
+        }
+        "check_command" => {
+            let cmd: PolicyCommand = serde_json::from_value(input["command"].clone()).map_err(|err| format!("Perintah tidak valid: {err}"))?;
+            router_tools::check_command(&ApiBridge(state), &cmd).await
+        }
+        "net_diagnose" => {
+            let kind = str_arg(input, "kind").ok_or("kind wajib diisi")?;
+            let address = str_arg(input, "address").ok_or("address wajib diisi")?;
+            router_tools::net_diagnose(&ApiBridge(state), kind, address, input["count"].as_u64()).await
+        }
+        "get_topology" => router_tools::topology(&ApiBridge(state)).await,
+        "audit_router" => {
+            let focus: Vec<String> = serde_json::from_value(input["focus"].clone()).unwrap_or_default();
+            router_tools::audit(&ApiBridge(state), &focus).await
+        }
+        "traffic_report" => {
+            let days = input["days"].as_i64().unwrap_or(7).clamp(1, 30);
+            let since = (telemetry::now_wib().date_naive() - chrono::Duration::days(days - 1)).to_string();
+            let top: Vec<Json> = state
+                .store
+                .run(move |c| {
+                    let mut s = c.prepare(
+                        "SELECT account, SUM(download), SUM(upload) FROM daily WHERE day >= ?1 GROUP BY account
+                         ORDER BY SUM(download) + SUM(upload) DESC LIMIT 10",
+                    )?;
+                    s.query_map([since], |r| Ok(json!({ "account": r.get::<_, String>(0)?, "download": r.get::<_, i64>(1)?, "upload": r.get::<_, i64>(2)? })))?
+                        .collect()
+                })
+                .await
+                .map_err(e)?;
+            let hist = state.store.run(move |c| telemetry::dashboard(c, days, None)).await.map_err(e)?;
+            Ok(json!({ "days": days, "daily": hist["history"], "top_accounts": top,
+                       "note": "Data per jam belum dicatat; jam sibuk belum tersedia." }))
+        }
         _ => Err(format!("Alat `{name}` belum tersedia di versi panel ini.")),
+    }
+}
+
+/// Adaptor klien RouterOS ke trait `RouterApi` milik crate agen.
+struct ApiBridge<'a>(&'a Shared);
+
+impl RouterApi for ApiBridge<'_> {
+    async fn call(&self, path: &str, args: &[(&str, String)], filters: &[(&str, String)]) -> Result<Vec<crate::routeros::Row>, String> {
+        let mut cmd = Command::new(path).map_err(e)?;
+        for (k, v) in args {
+            cmd = cmd.arg(k, v).map_err(e)?;
+        }
+        for (k, v) in filters {
+            cmd = cmd.filter(k, v).map_err(e)?;
+        }
+        self.0.router.call(&cmd).await.map(|rows| rows.into_iter().map(mask_secrets).collect()).map_err(e)
     }
 }
 
