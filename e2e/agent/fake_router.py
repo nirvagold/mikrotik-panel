@@ -37,6 +37,8 @@ T={
  '/user-manager/limitation/print':[{'.id':f'*3{i}','name':f'l-{u}','transfer-limit':str(10737418240*(i+1)),'reset-counters-start-time':'2026-11-01 00:00:00','reset-counters-interval':'monthly'} for i,u in enumerate(users)],
  '/ppp/active/print':[{'.id':'*a1','name':'budi','service':'pppoe','address':'10.0.0.2','uptime':'1h'},{'.id':'*a2','name':'sari','service':'pppoe','address':'10.0.0.3','uptime':'2h'}],
  '/interface/print':[{'name':'ether1','type':'ether','rx-byte':'5000000','tx-byte':'9000000','running':'true'}],
+ '/ip/service/print':[{'.id':'*s1','name':'api','port':'8728','address':'','disabled':'false'},{'.id':'*s2','name':'ssh','port':'22','address':'','disabled':'false'}],
+ '/user/active/print':[{'.id':'*u1','name':'panel','via':'api','address':'127.0.0.1'}],
  '/user-manager/session/print':[{'acct-session-id':'a1','user':'budi','started':(now-datetime.timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S'),'download':'500000000','upload':'50000000'}],
 }
 def handle(s):
@@ -46,6 +48,10 @@ def handle(s):
             if not w: continue
             path=w[0]; LOG.write(json.dumps(w)+'\n'); LOG.flush()
             filters=[x[1:].split('=',1) for x in w[1:] if x.startswith('?') and '=' in x]
+            if path.endswith('/set'):
+                attrs=dict(x[1:].split('=',1) for x in w[1:] if x.startswith('='))
+                for r in T.get(path[:-4]+'/print',[]):
+                    if r.get('.id')==attrs.get('.id'): r.update({k:v for k,v in attrs.items() if k!='.id'})
             rows=[r for r in T.get(path,[]) if all(r.get(k)==v for k,v in filters)]
             for r in rows: send(s,['!re']+[f'={k}={v}' for k,v in r.items()])
             tag=[x for x in w[1:] if x.startswith('.tag=')]

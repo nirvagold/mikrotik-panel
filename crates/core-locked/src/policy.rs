@@ -139,6 +139,53 @@ pub mod command {
         Err(CommandError(msg.into()))
     }
 
+    /// Layanan /ip service yang Available From-nya boleh diubah agen.
+    pub const SERVICES: &[&str] = &["api", "api-ssl", "ssh", "winbox", "www", "www-ssl", "ftp", "telnet"];
+
+    /// Layanan yang dipakai panel untuk tersambung ke router; IP panel wajib tetap diizinkan.
+    pub const PANEL_SERVICES: &[&str] = &["api", "api-ssl"];
+
+    /// Daftar Available From RouterOS ("a.b.c.d/nn,..."). Kosong = semua alamat.
+    pub fn parse_address_list(text: &str) -> Option<Vec<(std::net::IpAddr, u8)>> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Some(Vec::new());
+        }
+        text.split(',').map(|entry| {
+            let entry = entry.trim();
+            let (ip, prefix) = match entry.split_once('/') {
+                Some((ip, p)) => (ip.parse::<std::net::IpAddr>().ok()?, Some(p.parse::<u8>().ok()?)),
+                None => (entry.parse::<std::net::IpAddr>().ok()?, None),
+            };
+            let max = if ip.is_ipv4() { 32 } else { 128 };
+            let prefix = prefix.unwrap_or(max);
+            (prefix <= max).then_some((ip, prefix))
+        }).collect()
+    }
+
+    /// Apakah `ip` termasuk Available From `address` (kosong = semua alamat).
+    pub fn service_address_allows(address: &str, ip: std::net::IpAddr) -> bool {
+        let Some(list) = parse_address_list(address) else { return false };
+        if list.is_empty() {
+            return true;
+        }
+        let ip = match ip {
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(ip),
+            v4 => v4,
+        };
+        list.iter().any(|(net, prefix)| match (net, ip) {
+            (std::net::IpAddr::V4(n), std::net::IpAddr::V4(a)) => {
+                let mask = if *prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+                u32::from(*n) & mask == u32::from(a) & mask
+            }
+            (std::net::IpAddr::V6(n), std::net::IpAddr::V6(a)) => {
+                let mask = if *prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
+                u128::from(*n) & mask == u128::from(a) & mask
+            }
+            _ => false,
+        })
+    }
+
     const MAX_TEXT: usize = 512;
     const MAX_ARGS: usize = 24;
 
@@ -215,7 +262,9 @@ pub mod command {
             }
             let mut full = self.path.clone();
             full.push(self.verb.clone());
-            if let Some(blocked) = BLOCKED_PATHS.iter().find(|b| starts_with(&full, b)) {
+            if self.path == ["ip", "service"] {
+                self.validate_service()?;
+            } else if let Some(blocked) = BLOCKED_PATHS.iter().find(|b| starts_with(&full, b)) {
                 return err(format!("Menu /{} diblokir untuk agen.", blocked.join(" ")));
             }
             if self.args.len() + self.find.len() > MAX_ARGS {
@@ -257,9 +306,39 @@ pub mod command {
             Ok(())
         }
 
+        /// /ip service (pilihan Usep 2026-11-25): hanya baca, atau `set address=` pada satu
+        /// layanan bernama. Mematikan layanan, mengganti port/sertifikat, dan find lain ditolak,
+        /// supaya panel tidak bisa memutus jalurnya sendiri ke router. Pengecekan bahwa IP panel
+        /// tetap termasuk dilakukan aplikasi saat menjalankan (`service_address_allows`).
+        fn validate_service(&self) -> Result<(), CommandError> {
+            if matches!(self.verb.as_str(), "print" | "get" | "export") {
+                return Ok(());
+            }
+            if self.verb != "set" {
+                return err("Di /ip service agen hanya boleh mengubah Available From (set address=).");
+            }
+            let name_ok = self.find.len() == 1
+                && matches!(self.find.get("name"), Some(Value::Text(n)) if SERVICES.contains(&n.as_str()));
+            if !name_ok {
+                return err(format!("Pilih satu layanan dengan find name: {}.", SERVICES.join(", ")));
+            }
+            if self.args.len() != 1 || !self.args.contains_key("address") {
+                return err("Di /ip service hanya address (Available From) yang boleh diubah; mematikan layanan atau mengganti port tidak diizinkan.");
+            }
+            match self.args.get("address") {
+                Some(Value::Text(a)) if a.contains(' ') => err("Tulis Available From tanpa spasi, misalnya 10.10.10.0/24,10.3.91.185/32."),
+                Some(Value::Text(a)) if parse_address_list(a).is_some() => Ok(()),
+                Some(Value::Param { multiply: None, .. }) => Ok(()),
+                _ => err("Available From harus daftar IP/CIDR dipisah koma, misalnya 10.10.10.0/24,10.3.91.185/32."),
+            }
+        }
+
         /// Tingkat izin minimum untuk perintah ini.
         pub fn permission(&self) -> Permission {
             let verb = self.verb.as_str();
+            if self.path == ["ip", "service"] && verb == "set" {
+                return Permission::Critical;
+            }
             if READ_VERBS.contains(&verb) || verb == "ping" || self.path == ["tool", "traceroute"] {
                 Permission::Free
             } else if CRITICAL_VERBS.contains(&verb)
@@ -495,12 +574,32 @@ pub mod command {
         }
 
         #[test]
+        fn service_address_only_and_critical() {
+            let c = cmd(json!({"path":["ip","service"],"verb":"set","find":{"name":"ssh"},"args":{"address":"10.10.10.0/24,10.3.91.185/32"}}));
+            c.validate().unwrap();
+            assert_eq!(c.permission(), Permission::Critical);
+            assert!(cmd(json!({"path":["ip","service"],"verb":"print"})).validate().is_ok());
+            let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+            assert!(service_address_allows("10.10.10.0/24,10.3.91.185/32", ip("10.10.10.7")));
+            assert!(service_address_allows("10.10.10.0/24,10.3.91.185/32", ip("10.3.91.185")));
+            assert!(!service_address_allows("10.10.10.0/24,10.3.91.185/32", ip("10.3.91.186")));
+            assert!(service_address_allows("", ip("1.2.3.4")));
+            assert!(service_address_allows("0.0.0.0/0", ip("::ffff:1.2.3.4")));
+            assert!(!service_address_allows("x", ip("1.2.3.4")));
+        }
+
+        #[test]
         fn blocks_dangerous_menus() {
             for v in [
                 json!({"path":["system"],"verb":"reset-configuration"}),
                 json!({"path":["system","script"],"verb":"add","args":{"source":"x"}}),
                 json!({"path":["user"],"verb":"add"}),
                 json!({"path":["ip","service"],"verb":"set"}),
+                json!({"path":["ip","service"],"verb":"set","find":{"name":"api"},"args":{"disabled":"yes"}}),
+                json!({"path":["ip","service"],"verb":"set","find":{"name":"api"},"args":{"address":"10.0.0.0/8","port":"1"}}),
+                json!({"path":["ip","service"],"verb":"set","find":{"disabled":"no"},"args":{"address":"10.0.0.0/8"}}),
+                json!({"path":["ip","service"],"verb":"set","find":{"name":"api"},"args":{"address":"bukan-ip"}}),
+                json!({"path":["ip","service"],"verb":"disable","find":{"name":"telnet"}}),
                 json!({"path":[],"verb":"import"}),
                 json!({"path":["file"],"verb":"remove"}),
                 json!({"path":[],"verb":"export","args":{"file":"x"}}),

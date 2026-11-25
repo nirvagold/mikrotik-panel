@@ -43,6 +43,44 @@ function Login() {
   );
 }
 
+type UpdateStatus = { installed: string; latest: string; checked_at: string; check: string; last_tag: string; last_at: string; last_result: string; auto: boolean };
+
+function when(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/** Versi panel di bilah atas; tooltip berisi status pembaru otomatis. */
+function VersionPill() {
+  const [info, setInfo] = useState<{ version: string; update: UpdateStatus | null } | null>(null);
+  useEffect(() => {
+    const load = () => get<{ version: string; update: UpdateStatus | null }>('/api/version').then(setInfo).catch(() => {});
+    load();
+    const t = setInterval(load, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!info) return null;
+  const u = info.update;
+  const latest = u?.latest?.replace(/^v/, '');
+  const behind = !!latest && latest !== info.version;
+  const failed = u?.last_result === 'rollback' && u.last_tag.replace(/^v/, '') !== info.version;
+  const tone = failed ? 'bad' : behind ? 'warn' : '';
+  const lines = [`Panel v${info.version}`];
+  if (!u) lines.push('Pembaru otomatis belum terpasang di server ini.');
+  else {
+    lines.push(u.auto ? 'Update otomatis: aktif (cek tiap jam)' : 'Update otomatis: mati');
+    lines.push(`Rilis terbaru di GitHub: ${u.latest || 'belum terbaca'}`);
+    lines.push(`Dicek: ${when(u.checked_at)}${u.check === 'gagal' ? ' (gagal menghubungi GitHub)' : ''}`);
+    if (u.last_tag) lines.push(`Update terakhir: ${u.last_tag} ${u.last_result === 'ok' ? 'berhasil' : 'gagal, dikembalikan'} (${when(u.last_at)})`);
+    if (behind && !failed) lines.push(`Versi ${u.latest} akan dipasang otomatis pada pengecekan berikutnya.`);
+  }
+  return (
+    <span class={`pill version ${tone}`} title={lines.join('\n')} aria-label={lines.join('. ')}>
+      v{info.version}{behind ? <b> → {u!.latest}</b> : null}
+    </span>
+  );
+}
+
 function Shell() {
   const root = useRef<HTMLDivElement>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -94,6 +132,7 @@ function Shell() {
               router <b>● {ok ? 'terhubung' : 'terputus'}</b> {ok ? ago(dashboard.value?.sampled_at) : ''}
             </span>
             {r['cpu-load'] != null && <span class="pill hide-sm">CPU {r['cpu-load']}% · RAM {ram}</span>}
+            <VersionPill />
             <button type="button" class="pill-btn" onClick={refresh} disabled={refreshing} title="Ambil data terbaru dari router">{refreshing ? '…' : '↻'} <span class="hide-sm">Perbarui</span></button>
           </header>
           <main class="content">

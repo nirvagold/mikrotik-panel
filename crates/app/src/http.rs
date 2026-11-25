@@ -41,6 +41,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session_info))
+        .route("/api/version", get(version_info))
         .route("/api/events", get(events))
         .merge(crate::api::routes())
         .merge(crate::agent_api::routes())
@@ -204,6 +205,19 @@ async fn session_info(State(state): State<Shared>, headers: HeaderMap) -> Respon
         Some(s) => Json(json!({ "csrf": s.csrf })).into_response(),
         None => error(StatusCode::UNAUTHORIZED, "Belum masuk."),
     }
+}
+
+/// Status pembaru otomatis ditulis `mikrotik-panel-update` (root) dengan izin 644.
+const UPDATE_STATUS: &str = "/var/lib/mikrotik-panel-update/status.json";
+
+/// Versi panel yang berjalan + status pembaru otomatis bila terpasang (null bila tidak ada).
+async fn version_info() -> Response {
+    let path = std::env::var("PANEL_UPDATE_STATUS").unwrap_or_else(|_| UPDATE_STATUS.into());
+    let update = tokio::fs::read_to_string(path)
+        .await
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    Json(json!({ "version": crate::VERSION, "update": update })).into_response()
 }
 
 /// Dipakai systemd dan proses deploy: 200 bila database sehat, 503 bila tidak.

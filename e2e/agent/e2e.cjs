@@ -29,7 +29,7 @@ const out = (n) => `shots/${n}.png`;
   await ta.press('Enter');
   await p.waitForTimeout(300);
   await p.screenshot({ path: out('1-streaming') });
-  await p.waitForFunction(() => getComputedStyle(document.querySelector('.panel-root')).getPropertyValue('--accent').trim() !== '#4f46e5', null, { timeout: 15000 }).catch(() => {});
+  await p.waitForFunction(() => getComputedStyle(document.querySelector('.panel-root')).getPropertyValue('--accent').trim() !== '#22d3ee', null, { timeout: 15000 }).catch(() => {});
   await p.waitForTimeout(2500);
   res.accentAfter = await accent();
   res.noteVisible = await p.locator('text=Catatan dari agen').count();

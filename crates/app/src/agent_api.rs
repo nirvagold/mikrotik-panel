@@ -36,6 +36,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/agent/runs/{id}/cancel", post(cancel))
         .route("/api/agent/proposals/{id}/approve", post(approve))
         .route("/api/agent/proposals/{id}/reject", post(reject))
+        .route("/api/agent/proposals/{id}/revert", post(revert_proposal))
         .route("/api/settings/ai", get(ai_get).put(ai_put))
 }
 
@@ -464,9 +465,23 @@ async fn approve(
         return internal(err);
     }
     let tool = card["tool"].as_str().unwrap_or_default().to_string();
-    let (status, result) = match execute(&st, &tool, &card["input"]).await {
-        Ok(v) => ("done", v),
-        Err(m) => ("failed", m),
+    let service = service_command(&card["input"]);
+    let (status, result) = match &service {
+        Some(cmd) => match set_service_address(&st, cmd).await {
+            Ok((msg, old)) => {
+                // Simpan nilai lama agar admin bisa mengembalikannya dengan satu klik.
+                let mut input = card["input"].clone();
+                input["previous_address"] = json!(old);
+                let (pid, text) = (id.clone(), input.to_string());
+                let _ = st.store.run(move |c| c.execute("UPDATE agent_proposals SET input = ?1 WHERE id = ?2", (text, pid))).await;
+                ("done", msg)
+            }
+            Err(m) => ("failed", m),
+        },
+        None => match execute(&st, &tool, &card["input"]).await {
+            Ok(v) => ("done", v),
+            Err(m) => ("failed", m),
+        },
     };
     let account = card["input"]["account"].as_str().map(str::to_owned);
     let (aid, at, s2, r2) = (id.clone(), now(), status.to_string(), result.clone());
@@ -479,6 +494,95 @@ async fn approve(
             )
         })
         .await;
+    match set_status(&st, &id, status, Some(result)).await {
+        Ok(card) => Json(json!({ "card": card })).into_response(),
+        Err(err) => internal(err),
+    }
+}
+
+/// Perintah `/ip service set address=` (satu-satunya perubahan /ip service yang diizinkan policy).
+fn service_command(input: &Value) -> Option<PolicyCommand> {
+    let cmd: PolicyCommand = serde_json::from_value(input.get("command")?.clone()).ok()?;
+    (cmd.path == ["ip", "service"] && cmd.verb == "set").then_some(cmd)
+}
+
+/// IP yang dilihat router untuk sesi API panel (dari /user/active via=api), untuk memastikan
+/// Available From baru tidak memutus panel dari router.
+async fn panel_addresses(st: &Shared) -> Vec<std::net::IpAddr> {
+    let Ok(cmd) = Command::new("/user/active/print")
+        .and_then(|c| c.filter("via", "api"))
+        .and_then(|c| c.filter("name", &st.config.router.user))
+        .and_then(|c| c.proplist(&["address"]))
+    else {
+        return Vec::new();
+    };
+    let rows = st.router.call(&cmd).await.unwrap_or_default();
+    let mut ips: Vec<std::net::IpAddr> = rows.iter().filter_map(|r| r.get("address")?.parse().ok()).collect();
+    ips.sort();
+    ips.dedup();
+    ips
+}
+
+/// Ubah Available From satu layanan dengan pengaman. Mengembalikan (pesan, nilai lama).
+async fn set_service_address(st: &Shared, cmd: &PolicyCommand) -> Result<(String, String), String> {
+    use panel_core::policy::command::{Value as PV, PANEL_SERVICES, service_address_allows};
+    cmd.validate().map_err(|e| e.to_string())?;
+    let (Some(PV::Text(name)), Some(PV::Text(address))) = (cmd.find.get("name"), cmd.args.get("address")) else {
+        return Err("Layanan atau Available From belum lengkap.".into());
+    };
+    let finder = Command::new("/ip/service/print")
+        .and_then(|c| c.filter("name", name))
+        .and_then(|c| c.proplist(&[".id", "address"]))
+        .map_err(|e| e.to_string())?;
+    let rows = st.router.call(&finder).await.map_err(|e| e.to_string())?;
+    let [row] = rows.as_slice() else {
+        return Err(format!("Layanan {name} tidak ditemukan di router."));
+    };
+    let id = row.get(".id").cloned().ok_or("Router tidak mengirim .id layanan.")?;
+    let old = row.get("address").cloned().unwrap_or_default();
+    if PANEL_SERVICES.contains(&name.as_str()) {
+        let ips = panel_addresses(st).await;
+        if ips.is_empty() {
+            return Err("Tidak bisa memastikan IP panel di router, jadi perubahan dibatalkan supaya panel tidak terkunci.".into());
+        }
+        if let Some(ip) = ips.iter().find(|ip| !service_address_allows(address, **ip)) {
+            return Err(format!("Ditolak: IP panel {ip} tidak termasuk Available From baru untuk {name}, panel akan terputus dari router. Tambahkan {ip}/32 atau jaringannya."));
+        }
+    }
+    let set = Command::new("/ip/service/set")
+        .and_then(|c| c.arg(".id", &id))
+        .and_then(|c| c.arg("address", address))
+        .map_err(|e| e.to_string())?;
+    st.router.call(&set).await.map_err(|e| e.to_string())?;
+    let show = |a: &str| if a.is_empty() { "semua alamat".to_string() } else { a.to_string() };
+    Ok((format!("Available From {name}: {} → {}.", show(&old), show(address)), old))
+}
+
+/// Kembalikan Available From ke nilai sebelum usulan ini dijalankan (dengan pengaman yang sama).
+async fn revert_proposal(State(st): State<Shared>, Path(id): Path<String>) -> Response {
+    let card = match load_card(&st, &id).await {
+        Ok(c) => c,
+        Err(_) => return fail(StatusCode::NOT_FOUND, "Usulan tidak ditemukan."),
+    };
+    let (Some(mut cmd), Some(old)) = (service_command(&card["input"]), card["input"]["previous_address"].as_str()) else {
+        return fail(StatusCode::BAD_REQUEST, "Usulan ini tidak bisa dikembalikan.");
+    };
+    if card["status"] != "done" || card["input"]["reverted"] == true {
+        return fail(StatusCode::CONFLICT, "Usulan ini sudah dikembalikan atau belum dijalankan.");
+    }
+    cmd.args.insert("address".into(), panel_core::policy::command::Value::Text(old.to_string()));
+    let (status, result) = match set_service_address(&st, &cmd).await {
+        Ok((msg, _)) => ("done", format!("Dikembalikan. {msg}")),
+        Err(m) => return fail(StatusCode::CONFLICT, m),
+    };
+    let mut input = card["input"].clone();
+    input["reverted"] = json!(true);
+    let (pid, text) = (id.clone(), input.to_string());
+    let _ = st.store.run(move |c| c.execute("UPDATE agent_proposals SET input = ?1 WHERE id = ?2", (text, pid))).await;
+    let (aid, at, r2) = (format!("{id}-revert"), now(), result.clone());
+    let _ = st.store.run(move |c| c.execute(
+        "INSERT INTO audit (id, at, actor, account, action, before, after, status) VALUES (?1, ?2, 'admin', NULL, 'agent.revert_service', NULL, ?3, 'done')",
+        (aid, at, r2))).await;
     match set_status(&st, &id, status, Some(result)).await {
         Ok(card) => Json(json!({ "card": card })).into_response(),
         Err(err) => internal(err),

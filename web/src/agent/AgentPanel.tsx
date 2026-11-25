@@ -233,6 +233,13 @@ export function AgentPanel() {
     } catch (e) { setProblem((e as Error).message); }
   }
 
+  async function undoCard(card: ProposalCard) {
+    try {
+      const result = await post<{ card: ProposalCard }>(`/api/agent/proposals/${encodeURIComponent(card.id)}/revert`);
+      setProposals(list => list.map(p => p.id === card.id ? result.card : p));
+    } catch (e) { setProblem((e as Error).message); }
+  }
+
   function newConversation() {
     setConversation(null); setMessages([]); setProposals([]); setEditing(null); setQuestion(null);
     updateDraft(storage('agent-draft:new'));
@@ -307,7 +314,7 @@ export function AgentPanel() {
           return <article key={m.id} class="msg assistant">
             {used.length > 0 && <ul class="chips">{used.map(t => <li key={t.id} class="chip done">{TOOL_LABELS[t.name] ?? t.name}</li>)}</ul>}
             {text && <Markdown text={text} />}
-            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} />)}
+            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
             {lastOfTurn && !running && <div class="actions">
               {text && <button type="button" onClick={() => void navigator.clipboard?.writeText(text)}>Salin</button>}
               <button type="button" onClick={() => regenerate(index)}>Ulangi</button>
@@ -315,7 +322,7 @@ export function AgentPanel() {
             </div>}
           </article>;
         })}
-        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} />)}
+        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
         {running && (
           <article class="msg assistant live">
             {tools.length > 0 && <ul class="chips">{tools.map((t, i) => <li key={i} class={`chip ${t.status}`}>{TOOL_LABELS[t.name] ?? t.name}{t.status === 'started' ? '…' : t.status === 'error' ? ' ✕' : ' ✓'}</li>)}</ul>}
@@ -346,7 +353,8 @@ export function AgentPanel() {
   );
 }
 
-function Card({ card, typed, onType, onDecide }: { card: ProposalCard; typed: string; onType: (v: string) => void; onDecide: (c: ProposalCard, ok: boolean) => void }) {
+function Card({ card, typed, onType, onDecide, onRevert }: { card: ProposalCard; typed: string; onType: (v: string) => void; onDecide: (c: ProposalCard, ok: boolean) => void; onRevert: (c: ProposalCard) => void }) {
+  const revertable = card.status === 'done' && typeof card.input?.previous_address === 'string' && card.input?.reverted !== true;
   const critical = card.permission === 'critical';
   const phrase = card.label.trim().toLowerCase();
   return (
@@ -362,7 +370,7 @@ function Card({ card, typed, onType, onDecide }: { card: ProposalCard; typed: st
             {critical ? 'Jalankan' : 'Setujui'}</button>
           <button type="button" class="ghost" onClick={() => onDecide(card, false)}>Tolak</button>
         </div>
-      ) : <p class="card-status">{({ approved: 'Disetujui, sedang dijalankan…', rejected: 'Ditolak.', done: 'Selesai.', failed: 'Gagal.' } as Record<string, string>)[card.status]}{card.result ? ` ${card.result}` : ''}</p>}
+      ) : <p class="card-status">{({ approved: 'Disetujui, sedang dijalankan…', rejected: 'Ditolak.', done: 'Selesai.', failed: 'Gagal.' } as Record<string, string>)[card.status]}{card.result ? ` ${card.result}` : ''}{revertable && <> <button type="button" class="ghost" onClick={() => onRevert(card)}>Kembalikan nilai lama</button></>}</p>}
     </div>
   );
 }

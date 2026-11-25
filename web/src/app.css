@@ -166,3 +166,8 @@ td[data-col="limit"], td[data-col="remaining"] { color: var(--muted); }
 .login-card label { color: #7d8894; }
 .login-card input { color: #d8dee6; }
 .empty { min-height: 120px; display: grid; place-items: center; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius); padding: 16px; }
+.pill.version { cursor: help; }
+.pill.version b { font-weight: 400; color: var(--accent); }
+.pill.version.warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
+.pill.version.warn b { color: var(--warn); }
+.pill.version.bad { border-color: color-mix(in srgb, var(--danger) 50%, transparent); color: var(--danger); }

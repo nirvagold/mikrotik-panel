@@ -1,0 +1,31 @@
+const { chromium } = require('playwright');
+(async () => {
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } });
+  await ctx.addInitScript(() => { const o = Element.prototype.attachShadow; Element.prototype.attachShadow = function (i) { return o.call(this, { ...i, mode: 'open' }); }; });
+  const p = await ctx.newPage(); const res = {};
+  await p.goto('http://127.0.0.1:8799/');
+  await p.fill('input[type=password]', 'rahasia-admin-123'); await p.click('button[type=submit]');
+  await p.waitForSelector('.panel-root'); await p.waitForTimeout(1000);
+  const l = p.locator('[aria-label="Buka agen AI (Ctrl+K)"]'); if (await l.count()) await l.click();
+  const ta = p.locator('textarea[aria-label="Pesan untuk agen"]');
+  const ask = async (t) => { await ta.focus(); await p.keyboard.type(t); await p.keyboard.press('Enter'); await p.waitForTimeout(3500); };
+  const approveLast = async () => {
+    const card = p.locator('.card').last();
+    const phrase = await card.locator('.confirm b').innerText();
+    await card.locator('.confirm input').fill(phrase);
+    await card.locator('button:has-text("Jalankan")').click(); await p.waitForTimeout(2000);
+    return card.locator('.card-status').innerText();
+  };
+  await ask('tolong batasi-salah api');
+  res.badgeWrong = await p.locator('.card .badge').last().innerText();
+  res.wrong = await approveLast();
+  await ask('tolong batasi api');
+  res.ok = await approveLast();
+  await p.screenshot({ path: 'shots/svc-1-dijalankan.png' });
+  await p.locator('.card button:has-text("Kembalikan nilai lama")').last().click(); await p.waitForTimeout(2000);
+  res.reverted = await p.locator('.card .card-status').last().innerText();
+  res.revertButtonsLeft = await p.locator('.card button:has-text("Kembalikan nilai lama")').count();
+  await p.screenshot({ path: 'shots/svc-2-dikembalikan.png' });
+  console.log(JSON.stringify(res, null, 1)); await b.close();
+})();

@@ -23,13 +23,17 @@ class H(BaseHTTPRequestHandler):
             first_user=[m for m in msgs if m['role']=='user'][-1]
             res=last['content']
             parts=text('Selesai. Warna aksen sekarang hijau toska dan ada catatan baru di Ringkasan. Hasil alat: '+res[:80].replace('\n',' '))
+        elif 'batasi-salah' in ut:
+            parts=tool_calls([('propose_command',{'command':{'path':['ip','service'],'verb':'set','find':{'name':'api'},'args':{'address':'10.10.10.0/24'}},'reason':'Batasi API ke LAN.'})])
+        elif 'batasi' in ut:
+            parts=tool_calls([('propose_command',{'command':{'path':['ip','service'],'verb':'set','find':{'name':'api'},'args':{'address':'10.10.10.0/24,127.0.0.1/32'}},'reason':'Batasi API ke LAN dan server panel.'})])
         elif 'putus' in ut:
             parts=[chunk({'delta':{'content':'Saya siapkan perintahnya, perlu persetujuan Anda. '}})]+tool_calls([('propose_command',{'command':{'path':['ppp','active'],'verb':'remove','find':{'name':'budi'}},'reason':'Pelanggan minta sesi diputus.'})])
         elif 'lambat' in ut:
             parts=text(' '.join(['kata%d'%i for i in range(200)]))
         else:
             parts=[chunk({'delta':{'content':'Oke, saya ubah warnanya. '}})]+tool_calls([
-              ('set_tokens',{'changes':{'light':{'accent':'#0f766e'},'dark':{'accent':'#2dd4bf'},'radius':18}}),
+              ('set_tokens',{'changes':{'dark':{'accent':'#2dd4bf'},'radius':12}}),
               ('add_block',{'page':'ringkasan','index':0,'block':{'id':'catatan-agen','span':1,'kind':'text','props':{'markdown':'**Catatan dari agen:** desain diubah langsung tanpa reload.'}}}),
             ])
         self.send_response(200); self.send_header('content-type','text/event-stream'); self.send_header('transfer-encoding','chunked'); self.end_headers()

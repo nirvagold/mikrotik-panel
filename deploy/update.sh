@@ -37,6 +37,20 @@ case "$(uname -m)" in
   *) die "arsitektur $(uname -m) belum didukung" ;;
 esac
 
+# Status untuk ditampilkan panel (panel berjalan sebagai user dinamis, jadi file ini dibuat 644).
+write_status() { # $1 = tag terbaru di GitHub (boleh kosong), $2 = hasil cek: ok|gagal
+  local last_tag="" last_at="" last_result="" f
+  read -r last_tag last_at last_result < "$STATE/last" 2>/dev/null || true
+  chmod 755 "$STATE"
+  f="$STATE/status.json"
+  local latest="${1:-}"
+  [ -n "$latest" ] || latest=$(sed -n 's/.*"latest":"\([^"]*\)".*/\1/p' "$f" 2>/dev/null || true)
+  printf '{"installed":"%s","latest":"%s","checked_at":"%s","check":"%s","last_tag":"%s","last_at":"%s","last_result":"%s","auto":%s}\n' \
+    "$(current_tag)" "$latest" "$(date -Is)" "${2:-ok}" "$last_tag" "$last_at" "$last_result" \
+    "$(systemctl is-enabled mikrotik-panel-update.timer 9>&- >/dev/null 2>&1 && echo true || echo false)" > "$f.tmp"
+  chmod 644 "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+
 current_tag() { [ -L "$BASE/current" ] && basename "$(readlink "$BASE/current")" || true; }
 
 db_path() {
@@ -190,15 +204,18 @@ rollback() {
 case "${1:-}" in
   ""|--auto)
     tag=$(latest_tag) || true
-    [ -n "${tag:-}" ] || die "tidak bisa membaca rilis terbaru dari GitHub"
+    [ -n "${tag:-}" ] || { write_status "" gagal; die "tidak bisa membaca rilis terbaru dari GitHub"; }
+    trap 'write_status "$tag" ok' EXIT
     install_tag "$tag" auto ;;
   --check)
     tag=$(latest_tag) || true
+    write_status "${tag:-}" "$([ -n "${tag:-}" ] && echo ok || echo gagal)"
     echo "Terpasang: $(current_tag || echo -), terbaru di GitHub: ${tag:-tidak terbaca}" ;;
   --version)
     [ -n "${2:-}" ] || die "pakai: --version vX.Y.Z"
+    trap 'write_status "" ok' EXIT
     install_tag "$2" manual ;;
-  --rollback) rollback ;;
+  --rollback) trap 'write_status "" ok' EXIT; rollback ;;
   --status)
     echo "Terpasang: $(current_tag || echo -)"
     echo "Update terakhir: $(cat "$STATE/last" 2>/dev/null || echo belum pernah)"
