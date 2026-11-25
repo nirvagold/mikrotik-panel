@@ -46,6 +46,12 @@ pub struct RouterConfig {
     pub user: String,
     /// Kata sandi router terenkripsi (keluaran `mikrotik-panel encrypt`).
     pub password_encrypted: String,
+    /// API-SSL (8729). Wajib bila panel dan router tidak di jaringan yang sama.
+    #[serde(default)]
+    pub tls: bool,
+    /// SHA-256 sertifikat router (hex), dari `mikrotik-panel router-fingerprint`.
+    #[serde(default)]
+    pub tls_fingerprint: Option<String>,
     #[serde(default = "default_poll")]
     pub poll_seconds: u64,
 }
@@ -94,6 +100,17 @@ impl Config {
         if self.router.poll_seconds < 10 {
             return Err(ConfigError::Invalid(
                 "router.poll_seconds minimal 10".into(),
+            ));
+        }
+        if self.router.tls
+            && self
+                .router
+                .tls_fingerprint
+                .as_deref()
+                .is_none_or(str::is_empty)
+        {
+            return Err(ConfigError::Invalid(
+                "router.tls = true butuh router.tls_fingerprint (jalankan `mikrotik-panel router-fingerprint`)".into(),
             ));
         }
         Ok(())

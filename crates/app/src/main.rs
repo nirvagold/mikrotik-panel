@@ -1,7 +1,13 @@
+mod api;
 mod events;
 mod http;
+mod migrate;
+mod poller;
+mod quota;
 mod routeros;
 mod store;
+mod telemetry;
+mod tls;
 
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
@@ -18,7 +24,10 @@ const USAGE: &str = "Pemakaian:
   mikrotik-panel serve [--config PATH] [--port PORT]   jalankan panel
   mikrotik-panel gen-key                               buat secret_key baru
   mikrotik-panel hash-password                         hash kata sandi admin (dibaca dari stdin)
-  mikrotik-panel encrypt [--config PATH]               enkripsi kata sandi router (dibaca dari stdin)";
+  mikrotik-panel encrypt [--config PATH]               enkripsi kata sandi router (dibaca dari stdin)
+  mikrotik-panel router-fingerprint [--config PATH]    tampilkan sidik jari sertifikat API-SSL router
+  mikrotik-panel migrate --from PANEL.sqlite3 [--old-config private.json] [--config PATH]
+                                                       pindahkan data panel lama (sekali saja)";
 
 const DEFAULT_CONFIG: &str = "/etc/mikrotik-panel/config.toml";
 
@@ -26,6 +35,8 @@ struct Args {
     command: String,
     config: PathBuf,
     port: Option<u16>,
+    from: Option<PathBuf>,
+    old_config: Option<PathBuf>,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
@@ -35,6 +46,8 @@ fn parse_args() -> anyhow::Result<Args> {
         command,
         config: DEFAULT_CONFIG.into(),
         port: None,
+        from: None,
+        old_config: None,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -46,6 +59,10 @@ fn parse_args() -> anyhow::Result<Args> {
                         .parse()
                         .context("port tidak valid")?,
                 )
+            }
+            "--from" => args.from = Some(it.next().context("--from butuh path")?.into()),
+            "--old-config" => {
+                args.old_config = Some(it.next().context("--old-config butuh path")?.into())
             }
             _ => bail!("argumen tidak dikenal: {flag}\n\n{USAGE}"),
         }
@@ -87,6 +104,48 @@ fn main() -> anyhow::Result<()> {
             println!("{}", cipher.encrypt(&read_secret("Kata sandi router: ")?));
             Ok(())
         }
+        "router-fingerprint" => {
+            let text = std::fs::read_to_string(&args.config)?;
+            let config: toml::Value = toml::from_str(&text)?;
+            let host = config["router"]["host"]
+                .as_str()
+                .context("router.host belum diisi")?
+                .to_string();
+            let port = config["router"]
+                .get("port")
+                .and_then(|p| p.as_integer())
+                .unwrap_or(8729) as u16;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let fp = rt.block_on(routeros::read_fingerprint(&host, port))?;
+            println!("Sidik jari sertifikat {host}:{port}:\n{fp}\n");
+            println!(
+                "Cocokkan dengan router (/certificate print detail, kolom fingerprint), lalu isi di config:"
+            );
+            println!("  [router]\n  port = {port}\n  tls = true\n  tls_fingerprint = \"{fp}\"");
+            Ok(())
+        }
+        "migrate" => {
+            let config = Config::load(&args.config)?;
+            let cipher = Cipher::from_base64(&config.secret_key)?;
+            let from = args.from.context("migrate butuh --from PANEL.sqlite3")?;
+            let mut conn = rusqlite::Connection::open(&config.database)?;
+            drop(store::Store::open(&config.database)?); // pastikan skema terbaru
+            let report = migrate::run(&mut conn, &from, args.old_config.as_deref(), &cipher)?;
+            println!(
+                "Selesai: {} baris trafik harian, {} hari cakupan, {} riwayat audit, pengaturan AI {}.",
+                report.daily,
+                report.coverage,
+                report.audit,
+                if report.ai_settings {
+                    "dipindahkan"
+                } else {
+                    "tidak dipindahkan"
+                }
+            );
+            Ok(())
+        }
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(())
@@ -122,6 +181,10 @@ async fn run(config: Config) -> anyhow::Result<()> {
         port: config.router.port,
         user: config.router.user.clone(),
         password: router_password,
+        tls_fingerprint: config
+            .router
+            .tls
+            .then(|| config.router.tls_fingerprint.clone().unwrap_or_default()),
     }));
     let addr = SocketAddr::new(config.bind, config.port);
     let state = Arc::new(http::AppState {
@@ -130,8 +193,11 @@ async fn run(config: Config) -> anyhow::Result<()> {
         store,
         hub: events::Hub::default(),
         router,
+        quota: Default::default(),
+        sync_lock: Default::default(),
         config,
     });
+    poller::spawn(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("gagal bind {addr}"))?;

@@ -216,6 +216,8 @@ pub struct RouterTarget {
     pub port: u16,
     pub user: String,
     pub password: String,
+    /// Sidik jari sertifikat (API-SSL). None = API biasa tanpa TLS.
+    pub tls_fingerprint: Option<String>,
 }
 
 pub struct RouterOs {
@@ -237,8 +239,12 @@ impl RouterOs {
             .await
             .map_err(|_| RouterError::Timeout)??;
         tcp.set_nodelay(true)?;
+        let io: Box<dyn Io> = match &self.target.tls_fingerprint {
+            Some(fp) => Box::new(tls_handshake(tcp, &self.target.host, Some(fp)).await?.0),
+            None => Box::new(tcp),
+        };
         let mut conn = Conn {
-            io: BufReader::with_capacity(8192, Box::new(tcp)),
+            io: BufReader::with_capacity(8192, io),
         };
         login(&mut conn, &self.target.user, &self.target.password).await?;
         Ok(conn)
@@ -288,6 +294,33 @@ impl RouterOs {
             .and_then(|r| r.get("name").cloned())
             .unwrap_or_default())
     }
+}
+
+async fn tls_handshake(
+    tcp: TcpStream,
+    host: &str,
+    fingerprint: Option<&str>,
+) -> Result<(tokio_rustls::client::TlsStream<TcpStream>, Option<String>), RouterError> {
+    let (config, seen) = crate::tls::client_config(fingerprint);
+    let name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| RouterError::Invalid(format!("host {host:?}")))?;
+    let stream = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        tokio_rustls::TlsConnector::from(config).connect(name, tcp),
+    )
+    .await
+    .map_err(|_| RouterError::Timeout)??;
+    let fp = seen.lock().unwrap().clone();
+    Ok((stream, fp))
+}
+
+/// Baca sidik jari sertifikat API-SSL router (untuk dipasang di config oleh admin).
+pub async fn read_fingerprint(host: &str, port: u16) -> Result<String, RouterError> {
+    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| RouterError::Timeout)??;
+    let (_, fp) = tls_handshake(tcp, host, None).await?;
+    fp.ok_or(RouterError::Protocol)
 }
 
 async fn login(conn: &mut Conn, user: &str, password: &str) -> Result<(), RouterError> {
@@ -412,5 +445,73 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n, 0);
+    }
+}
+
+/// Router palsu untuk tes: menjawab login dan perintah sesuai tabel `path -> baris`.
+/// Perintah `.../set` dicatat dan menerapkan perubahan ke baris print yang cocok (`.id`).
+#[cfg(test)]
+pub mod fake {
+    use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    pub type Tables = Arc<StdMutex<std::collections::HashMap<String, Vec<Row>>>>;
+
+    pub async fn start(tables: Tables) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let tables = tables.clone();
+                tokio::spawn(async move {
+                    let mut c = Conn {
+                        io: BufReader::new(Box::new(sock)),
+                    };
+                    while let Ok(words) = c.read_sentence().await {
+                        let path = words[0].clone();
+                        let attrs = parse_attrs(&words[1..]);
+                        let filters: Vec<(String, String)> = words[1..]
+                            .iter()
+                            .filter_map(|w| {
+                                w.strip_prefix('?')?
+                                    .split_once('=')
+                                    .map(|(k, v)| (k.into(), v.into()))
+                            })
+                            .collect();
+                        if let Some(menu) = path.strip_suffix("/set") {
+                            let mut t = tables.lock().unwrap();
+                            if let Some(rows) = t.get_mut(&format!("{menu}/print")) {
+                                for r in
+                                    rows.iter_mut().filter(|r| r.get(".id") == attrs.get(".id"))
+                                {
+                                    for (k, v) in &attrs {
+                                        r.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            }
+                        }
+                        let rows: Vec<Row> = tables
+                            .lock()
+                            .unwrap()
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|r| filters.iter().all(|(k, v)| r.get(k) == Some(v)))
+                            .collect();
+                        for r in rows {
+                            let mut s = vec!["!re".to_string()];
+                            s.extend(r.iter().map(|(k, v)| format!("={k}={v}")));
+                            c.write_sentence(&s).await.unwrap();
+                        }
+                        c.write_sentence(&["!done".into()]).await.unwrap();
+                    }
+                });
+            }
+        });
+        port
     }
 }

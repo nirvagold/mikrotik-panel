@@ -28,6 +28,8 @@ pub struct AppState {
     pub store: Store,
     pub hub: Hub,
     pub router: Arc<RouterOs>,
+    pub quota: crate::quota::Quota,
+    pub sync_lock: tokio::sync::Mutex<()>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -39,6 +41,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/logout", post(logout))
         .route("/api/session", get(session_info))
         .route("/api/events", get(events))
+        .merge(crate::api::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -272,7 +275,10 @@ mod tests {
                 port: 1,
                 user: "panel".into(),
                 password: "x".into(),
+                tls_fingerprint: None,
             })),
+            quota: Default::default(),
+            sync_lock: Default::default(),
             config,
         })
     }
