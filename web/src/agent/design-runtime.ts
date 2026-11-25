@@ -30,11 +30,8 @@ export function tokensCss(t: Tokens): string {
   // Token juga dipasang di host panel agen (di luar .panel-root) supaya panel ikut tema,
   // sementara CSS khusus agen (berawalan .panel-root) tetap tidak bisa menjangkaunya.
   const sel = '.panel-root,#agent-host';
-  const light = `${sel}{${shared}${vars(t.light)}color-scheme:light}`;
-  const dark = `${sel}{${vars(t.dark)}color-scheme:dark}`;
-  if (t.mode === 'light') return light;
-  if (t.mode === 'dark') return `${sel}{${shared}${vars(t.dark)}color-scheme:dark}`;
-  return `${light}@media (prefers-color-scheme: dark){${dark}}`;
+  // Panel selalu gelap (Konsol NOC): palet light dan mode lama diabaikan.
+  return `${sel}{${shared}${vars(t.dark)}color-scheme:dark}`;
 }
 
 /** Terapkan spec. Mengembalikan false bila CSS khusus dimatikan karena membuat teks tak terbaca. */

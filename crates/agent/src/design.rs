@@ -417,15 +417,25 @@ impl DesignSpec {
 
     /// Terapkan satu operasi; hasilnya selalu tervalidasi utuh.
     pub fn apply(&self, op: &DesignOp) -> Result<DesignSpec, DesignError> {
-        let mut next = self.clone();
+        let mut next = self.clone().normalized();
         match op {
             DesignOp::SetTokens { changes } => {
+                if changes.get("light").is_some() {
+                    return err("Panel selalu bertema gelap. Ubah palet `dark`, bukan `light`.");
+                }
+                if changes.get("mode").is_some_and(|m| m != "dark") {
+                    return err("Panel selalu bertema gelap; mode tidak bisa diganti.");
+                }
                 let mut tokens = serde_json::to_value(&next.tokens).expect("tokens serialize");
                 merge_patch(&mut tokens, changes);
                 next.tokens = serde_json::from_value(tokens)
                     .map_err(|e| DesignError(format!("Perubahan token tidak valid: {e}")))?;
             }
-            DesignOp::SetThemeMode { mode } => next.tokens.mode = *mode,
+            DesignOp::SetThemeMode { mode } => {
+                if *mode != ThemeMode::Dark {
+                    return err("Panel selalu bertema gelap; mode terang dan ikut sistem tidak tersedia.");
+                }
+            }
             DesignOp::AddBlock { page, index, block } => {
                 let page = next.page_mut(page)?;
                 let at = index.unwrap_or(page.blocks.len()).min(page.blocks.len());
@@ -540,9 +550,19 @@ pub fn merge_patch(target: &mut Json, patch: &Json) {
     }
 }
 
-/// Desain bawaan: meniru panel lama, tema gelap yang tenang.
+/// Desain bawaan: Konsol NOC, selalu gelap.
 pub fn default_spec() -> DesignSpec {
-    serde_json::from_str(include_str!("default_design.json")).expect("default design valid JSON")
+    let spec: DesignSpec = serde_json::from_str(include_str!("default_design.json")).expect("default design valid JSON");
+    spec.normalized()
+}
+
+impl DesignSpec {
+    /// Panel selalu gelap (pilihan Usep 2026-11-25). Draft lama bermode light/system
+    /// dinormalisasi saat dibaca, jadi tersimpan sebagai dark pada checkpoint berikutnya.
+    pub fn normalized(mut self) -> Self {
+        self.tokens.mode = ThemeMode::Dark;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -557,6 +577,19 @@ mod tests {
     #[test]
     fn default_is_valid() {
         default_spec().validate().unwrap();
+    }
+
+    #[test]
+    fn always_dark() {
+        let spec = default_spec();
+        assert_eq!(spec.tokens.mode, ThemeMode::Dark);
+        assert!(spec.apply(&op(json!({"op": "set_theme_mode", "mode": "light"}))).is_err());
+        assert!(spec.apply(&op(json!({"op": "set_tokens", "changes": {"light": {"accent": "#ff0000"}}}))).is_err());
+        assert!(spec.apply(&op(json!({"op": "set_tokens", "changes": {"mode": "system"}}))).is_err());
+        let mut old = spec.clone();
+        old.tokens.mode = ThemeMode::Light;
+        let next = old.apply(&op(json!({"op": "set_tokens", "changes": {"dark": {"accent": "#38bdf8"}}}))).unwrap();
+        assert_eq!(next.tokens.mode, ThemeMode::Dark);
     }
 
     #[test]

@@ -14,7 +14,7 @@ export function keyIntent(e: { key: string; shiftKey: boolean; ctrlKey?: boolean
   return 'none';
 }
 
-export type Slash = { command: 'undo' | 'redo' | 'reset' | 'new' | 'apply' | 'discard' | 'theme'; arg?: 'light' | 'dark' | 'system' };
+export type Slash = { command: 'undo' | 'redo' | 'reset' | 'new' | 'apply' | 'discard' };
 
 export const SLASH_HELP: [string, string][] = [
   ['/undo', 'Batalkan perubahan desain terakhir'],
@@ -22,12 +22,11 @@ export const SLASH_HELP: [string, string][] = [
   ['/terapkan', 'Jadikan draft desain aktif'],
   ['/buang', 'Buang draft, kembali ke desain aktif'],
   ['/reset', 'Kembali ke desain bawaan'],
-  ['/tema gelap|terang|sistem', 'Ganti mode tema lewat agen'],
   ['/baru', 'Mulai percakapan baru'],
 ];
 
 export function parseSlash(text: string): Slash | null {
-  const [cmd, arg] = text.trim().toLowerCase().split(/\s+/, 2);
+  const [cmd] = text.trim().toLowerCase().split(/\s+/, 2);
   switch (cmd) {
     case '/undo': return { command: 'undo' };
     case '/redo': return { command: 'redo' };
@@ -35,10 +34,6 @@ export function parseSlash(text: string): Slash | null {
     case '/baru': case '/new': return { command: 'new' };
     case '/terapkan': case '/apply': return { command: 'apply' };
     case '/buang': return { command: 'discard' };
-    case '/tema': {
-      const map: Record<string, Slash['arg']> = { gelap: 'dark', dark: 'dark', terang: 'light', light: 'light', sistem: 'system', system: 'system' };
-      return arg && map[arg] ? { command: 'theme', arg: map[arg] } : null;
-    }
     default: return null;
   }
 }

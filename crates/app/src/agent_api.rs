@@ -50,8 +50,16 @@ fn internal(err: impl std::fmt::Display) -> Response {
     )
 }
 
+/// Panel selalu gelap: spec lama di DB (mode light/system) dinormalkan saat dibaca dan disalin.
+fn dark_spec(spec: &str) -> String {
+    serde_json::from_str::<panel_agent::design::DesignSpec>(spec)
+        .ok()
+        .and_then(|s| serde_json::to_string(&s.normalized()).ok())
+        .unwrap_or_else(|| spec.to_owned())
+}
+
 fn version_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
-    let spec: String = r.get("spec")?;
+    let spec = dark_spec(&r.get::<_, String>("spec")?);
     Ok(json!({
         "id": r.get::<_, String>("id")?, "parent_id": r.get::<_, Option<String>>("parent_id")?,
         "status": r.get::<_, String>("status")?, "source": r.get::<_, String>("source")?,
@@ -84,6 +92,7 @@ fn design_state(c: &mut rusqlite::Connection) -> rusqlite::Result<Value> {
 
 /// Buat draft baru berisi `spec` dengan induk draft saat ini.
 fn new_draft(c: &mut rusqlite::Connection, spec: &str, source: &str) -> rusqlite::Result<Value> {
+    let spec = &dark_spec(spec);
     let (parent, _) = current_draft(c)?;
     let id = random_token();
     let css = serde_json::from_str::<Value>(spec)

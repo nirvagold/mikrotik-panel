@@ -19,7 +19,6 @@ test('Esc menghentikan, panah atas mengedit pesan terakhir', () => {
 });
 test('perintah garis miring', () => {
   assert.deepEqual(parseSlash('/undo'), { command: 'undo' });
-  assert.deepEqual(parseSlash('/tema Gelap'), { command: 'theme', arg: 'dark' });
-  assert.equal(parseSlash('/tema ungu'), null);
+  assert.equal(parseSlash('/tema terang'), null);
   assert.equal(parseSlash('ubah warna'), null);
 });

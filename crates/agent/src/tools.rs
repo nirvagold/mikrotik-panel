@@ -68,8 +68,7 @@ pub fn catalog() -> Vec<ToolDef> {
     vec![
         // A. Desain dan layout (semua masuk draft, selalu bisa di-revert)
         t("get_design", Design, Free, "Baca design spec draft saat ini (tokens, nav, pages, custom_css).", obj(json!({}), &[])),
-        t("set_tokens", Design, Free, "Ubah token desain dengan merge patch: light/dark palet (hex), font (system|inter|ibm_plex_sans|source_sans|serif|mono), font_size 12-20, radius 0-24, density 70-150, shadow none|soft|strong. Kontras teks dicek otomatis.", obj(json!({"changes": {"type": "object"}}), &["changes"])),
-        t("set_theme_mode", Design, Free, "Pilih mode tema.", obj(json!({"mode": {"enum": ["light", "dark", "system"]}}), &["mode"])),
+        t("set_tokens", Design, Free, "Ubah token desain dengan merge patch. Panel SELALU gelap: hanya palet dark (hex) yang boleh diubah, font (system|inter|ibm_plex_sans|source_sans|serif|mono), font_size 12-20, radius 0-24, density 70-150, shadow none|soft|strong. Kontras teks dicek otomatis.", obj(json!({"changes": {"type": "object"}}), &["changes"])),
         t("add_block", Design, Free, BLOCK_DOC, obj(json!({"page": s("ID halaman"), "index": int(0, 100, "posisi, kosong = paling bawah"), "block": {"type": "object"}}), &["page", "block"])),
         t("update_block", Design, Free, "Ubah lebar (span) dan/atau props blok dengan merge patch.", obj(json!({"id": s("ID blok"), "span": int(1, 4, "lebar kolom"), "props": {"type": "object"}}), &["id"])),
         t("duplicate_block", Design, Free, "Gandakan blok tepat di bawahnya.", obj(json!({"id": s("ID blok"), "new_id": s("ID baru")}), &["id", "new_id"])),

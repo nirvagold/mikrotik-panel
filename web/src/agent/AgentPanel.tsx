@@ -9,7 +9,7 @@ import { Markdown } from './markdown';
 import type { ChatMessage, Conversation, Part, ProposalCard } from './types';
 
 const TOOL_LABELS: Record<string, string> = {
-  get_design: 'Membaca desain', set_tokens: 'Mengubah warna & font', set_theme_mode: 'Mengganti mode tema',
+  get_design: 'Membaca desain', set_tokens: 'Mengubah warna & font',
   add_block: 'Menambah blok', update_block: 'Mengubah blok', duplicate_block: 'Menggandakan blok', move_block: 'Memindah blok',
   remove_block: 'Menghapus blok', set_page_layout: 'Mengatur layout', add_page: 'Menambah halaman', remove_page: 'Menghapus halaman',
   set_nav: 'Mengatur menu', set_custom_css: 'Menulis CSS', preview_viewport: 'Pratinjau ukuran layar', revert_design: 'Mengembalikan desain',
@@ -164,7 +164,6 @@ export function AgentPanel() {
         case 'discard': await design.discard(); break;
         case 'reset': await design.resetToDefault(); break;
         case 'new': newConversation(); break;
-        case 'theme': await send(`Ganti mode tema ke ${slash.arg === 'dark' ? 'gelap' : slash.arg === 'light' ? 'terang' : 'ikut sistem'}.`); return true;
       }
       updateDraft('');
     } catch (e) { setProblem((e as Error).message); }
@@ -287,7 +286,7 @@ export function AgentPanel() {
           <div class="intro">
             <h2>Apa yang ingin Anda ubah?</h2>
             <p>Saya bisa mengubah tampilan panel secara langsung, membaca router, menyusun tombol aksi MikroTik, dan memberi saran.</p>
-            {['Buat tema gelap dengan aksen hijau dan sudut lebih bulat', 'Taruh tabel pelanggan offline di paling atas Ringkasan', 'Buatkan tombol top-up 10 GiB untuk pelanggan yang dipilih', 'Audit keamanan router saya'].map(s =>
+            {['Pindahkan Kuota menipis ke paling atas dan pakai aksen biru muda', 'Taruh tabel pelanggan offline di paling atas Ringkasan', 'Buatkan tombol top-up 10 GiB untuk pelanggan yang dipilih', 'Audit keamanan router saya'].map(s =>
               <button key={s} type="button" class="suggest" onClick={() => { updateDraft(s); input.current?.focus(); }}>{s}</button>)}
           </div>
         )}
@@ -359,9 +358,9 @@ function Card({ card, typed, onType, onDecide }: { card: ProposalCard; typed: st
         <div class="card-actions">
           {critical && <label class="confirm"><span>Ketik <b>{phrase}</b> untuk melanjutkan</span>
             <input value={typed} onInput={e => onType((e.target as HTMLInputElement).value)} autoComplete="off" spellcheck={false} /></label>}
-          <button type="button" class="ghost" onClick={() => onDecide(card, false)}>Tolak</button>
           <button type="button" class={critical ? 'danger' : 'primary'} disabled={critical && typed.trim().toLowerCase() !== phrase} onClick={() => onDecide(card, true)}>
             {critical ? 'Jalankan' : 'Setujui'}</button>
+          <button type="button" class="ghost" onClick={() => onDecide(card, false)}>Tolak</button>
         </div>
       ) : <p class="card-status">{({ approved: 'Disetujui, sedang dijalankan…', rejected: 'Ditolak.', done: 'Selesai.', failed: 'Gagal.' } as Record<string, string>)[card.status]}{card.result ? ` ${card.result}` : ''}</p>}
     </div>
