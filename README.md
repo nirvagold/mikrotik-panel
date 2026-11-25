@@ -31,6 +31,14 @@ Rencana lengkap: https://claude.ai/artifact/2nXcHyXLDPFcwf8ZD75tFH
   Router harus punya sertifikat di `/ip service set api-ssl certificate=...`.
 - Pindah dari panel lama: `mikrotik-panel migrate --from panel.sqlite3 --old-config private.json`.
 
+## Status tahap 3 (tampilan web)
+
+- `web/`: Preact + signals, ~25 KB JS gzip, tertanam di binary (tidak perlu Node di server).
+- Halaman Ringkasan, Pelanggan (+ detail, tambah kuota dengan pratinjau), Audit, Pengaturan AI, Memori agen.
+- Panel chat agen di samping (Enter kirim, Shift+Enter baris baru); tampilan berubah langsung lewat SSE tanpa reload.
+- Darurat: buka `/?design=default` bila desain buatan agen membuat panel tak terpakai.
+- RSS terukur ~5,7 MB (binary rilis x86_64, router tiruan 16 pelanggan).
+
 ## Pasang
 
 ```sh
@@ -48,6 +56,7 @@ curl -s http://127.0.0.1:8765/api/health
 ## Build
 
 ```sh
+(cd web && npm ci && npm run build)   # dulu, hasilnya ditanam ke binary
 cargo test
 cargo build --release                                          # mesin ini
 cargo zigbuild --release --target x86_64-unknown-linux-musl    # VPS x86_64, binary statis
