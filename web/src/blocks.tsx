@@ -100,8 +100,8 @@ export function TrafficChart({ block }: Props<'traffic_chart'>) {
   return (
     <div>
       <h2 class="block-title">Trafik {days} hari{account ? ` · ${account}` : ''}</h2>
-      <TrafficBars history={sliced} />
-      <p class="muted">Total {bytes(total)}</p>
+      {total > 0 ? <TrafficBars history={sliced} /> : <p class="muted empty">Belum ada data trafik. Grafik terisi setelah poller berjalan beberapa saat.</p>}
+      {total > 0 && <p class="muted small">Total {bytes(total)}</p>}
     </div>
   );
 }
@@ -113,11 +113,19 @@ const COLUMN_LABELS: Record<string, string> = {
 
 function cell(c: Customer, col: string) {
   switch (col) {
-    case 'name': return <a href={`/pelanggan?akun=${encodeURIComponent(c.name)}`}>{c.name}</a>;
-    case 'status': return <span class={`badge ${c.disabled ? 'off' : c.online ? 'ok' : 'idle'}`}>{c.disabled ? 'nonaktif' : c.online ? 'online' : 'offline'}</span>;
+    case 'name': return <a class="acct" href={`/pelanggan?akun=${encodeURIComponent(c.name)}`}>{c.name}</a>;
+    case 'status': {
+      const k = c.disabled ? 'off' : c.online ? 'ok' : 'idle';
+      return <span class={`status ${k}`}><span class="status-dot" aria-hidden="true" />{c.disabled ? 'nonaktif' : c.online ? 'online' : 'offline'}</span>;
+    }
     case 'address': return c.address ?? '—';
     case 'profile': return c.profile ?? '—';
-    case 'used': return gib(c.used);
+    case 'used': {
+      if (!c.limit) return gib(c.used);
+      const pct = Math.min(100, Math.round((100 * (c.used ?? 0)) / c.limit));
+      const tone = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+      return <span class="usage"><span class={`usage-bar ${tone}`} role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% terpakai`}><span style={{ width: `${pct}%` }} /></span>{gib(c.used)}</span>;
+    }
     case 'remaining': return c.approximate ? 'perkiraan' : gib(c.remaining);
     case 'limit': return gib(c.limit);
     case 'uptime': return c.uptime ?? '—';

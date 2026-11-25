@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci
+          npm test --if-present
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install zig + cargo-zigbuild
+        run: pip install --user ziglang cargo-zigbuild
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build static binaries
+        run: |
+          mkdir -p dist
+          for t in x86_64 aarch64; do
+            cargo zigbuild --release --locked -p mikrotik-panel --target $t-unknown-linux-musl
+            cp target/$t-unknown-linux-musl/release/mikrotik-panel dist/mikrotik-panel-$t
+          done
+          cd dist && sha256sum mikrotik-panel-* > SHA256SUMS && cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mikrotik-panel-${{ github.sha }}
+          path: dist/*
+          retention-days: 30
+
+      - name: Release (tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

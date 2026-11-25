@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import './app.css';
 import './agent/design.css';
+import './app.css';
 import { DesignPage, liveSpec, mountAgentPanel, startDesign, type BlockRenderers } from './agent';
 import { applyDesign } from './agent/design-runtime';
 import type { DesignSpec } from './agent/types';
@@ -34,7 +34,7 @@ function Login() {
   return (
     <main class="login">
       <form class="login-card stack" onSubmit={submit}>
-        <h1>Panel MikroTik</h1>
+        <div class="login-brand"><span class="brand-mark" aria-hidden="true">M</span><h1>Panel MikroTik</h1></div>
         <label>Kata sandi admin<input type="password" autocomplete="current-password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autofocus /></label>
         <button type="submit" disabled={busy}>{busy ? 'Memeriksa…' : 'Masuk'}</button>
         {error && <p class="alert" role="alert">{error}</p>}
@@ -67,26 +67,40 @@ function Shell() {
     try { await post('/api/router/refresh'); await refreshDashboard(); } catch (e) { routerStatus.value = { ok: false, error: (e as Error).message }; } finally { setRefreshing(false); }
   };
   useEffect(() => { document.title = page ? `${page.title} · Panel MikroTik` : 'Panel MikroTik'; }, [page?.title]);
+  const r = dashboard.value?.resources ?? {};
+  const total = Number(r['total-memory']), free = Number(r['free-memory']);
+  const ram = total ? `${Math.round(100 * (1 - free / total))}%` : '—';
+  const ok = routerStatus.value.ok;
   return (
     <div class="panel-root" ref={root}>
       <div class="shell">
         <nav class="nav" aria-label="Menu utama">
-          <a class="brand" href="/">Panel MikroTik</a>
+          <a class="brand" href="/" title="Panel MikroTik"><span class="brand-mark" aria-hidden="true">M</span><span class="brand-text">Panel MikroTik</span></a>
           <ul>
             {spec?.nav.items.map(item => (
-              <li key={item.page}><a href={`/${item.page}`} aria-current={page?.id === item.page ? 'page' : undefined}><span class="nav-icon" aria-hidden="true">{item.icon}</span>{item.label}</a></li>
+              <li key={item.page}><a href={`/${item.page}`} title={item.label} aria-current={page?.id === item.page ? 'page' : undefined}><span class="nav-icon" aria-hidden="true">{item.icon}</span><span class="nav-label">{item.label}</span></a></li>
             ))}
           </ul>
           <div class="nav-foot">
-            <button type="button" class="ghost small" onClick={refresh} disabled={refreshing}>{refreshing ? 'Memperbarui…' : 'Perbarui data'}</button>
-            <span class="muted small">{routerStatus.value.ok ? `Sinkron ${ago(dashboard.value?.sampled_at)}` : 'Router tidak terjangkau'}</span>
-            <button type="button" class="ghost small" onClick={() => void logout()}>Keluar</button>
+            <button type="button" class="icon-btn" title="Keluar" aria-label="Keluar" onClick={() => void logout()}>⏻</button>
           </div>
         </nav>
-        <main class="content">
-          {emergency && <p class="alert">Mode darurat: desain bawaan ditampilkan dan agen dimatikan. <a href="/" onClick={e => { e.preventDefault(); location.assign('/'); }}>Kembali ke desain biasa</a></p>}
-          {page ? <DesignPage page={page} renderers={renderers} /> : <p class="muted design-page">Memuat tampilan…</p>}
-        </main>
+        <div class="main-col">
+          <header class="topbar">
+            <h1 class="topbar-title">{page?.title ?? 'Panel MikroTik'}</h1>
+            <span class="crumb">{r['board-name'] ? `/ ${r['board-name']}${r.version ? ` · RouterOS ${String(r.version).split(' ')[0]}` : ''}` : ''}</span>
+            <span class="spacer" />
+            <span class={`pill ${ok ? 'ok' : 'bad'}`} title={ok ? undefined : routerStatus.value.error}>
+              router <b>● {ok ? 'terhubung' : 'terputus'}</b> {ok ? ago(dashboard.value?.sampled_at) : ''}
+            </span>
+            {r['cpu-load'] != null && <span class="pill hide-sm">CPU {r['cpu-load']}% · RAM {ram}</span>}
+            <button type="button" class="pill-btn" onClick={refresh} disabled={refreshing} title="Ambil data terbaru dari router">{refreshing ? '…' : '↻'} <span class="hide-sm">Perbarui</span></button>
+          </header>
+          <main class="content">
+            {emergency && <p class="alert">Mode darurat: desain bawaan ditampilkan dan agen dimatikan. <a href="/" onClick={e => { e.preventDefault(); location.assign('/'); }}>Kembali ke desain biasa</a></p>}
+            {page ? <DesignPage page={page} renderers={renderers} /> : <p class="muted design-page">Memuat tampilan…</p>}
+          </main>
+        </div>
       </div>
     </div>
   );
