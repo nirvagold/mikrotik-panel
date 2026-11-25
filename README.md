@@ -67,7 +67,7 @@ sudo mikrotik-panel-update --version v0.1.0  # pasang versi tertentu
 sudo systemctl disable --now mikrotik-panel-update.timer   # matikan update otomatis
 ```
 
-Membuat rilis: `git tag v0.1.1 && git push origin v0.1.1`. GitHub Actions membangun binary dengan
+Membuat rilis: di GitHub buka Actions → build → Run workflow, isi `release` dengan tag baru (mis. `v0.1.1`); atau `git tag v0.1.1 && git push origin v0.1.1`. GitHub Actions membangun binary dengan
 versi dari tag dan mengunggah binary, `SHA256SUMS`, skrip, dan unit systemd ke halaman rilis.
 
 ## Build
