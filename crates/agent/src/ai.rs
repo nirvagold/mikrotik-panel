@@ -305,6 +305,80 @@ pub async fn stream_turn(
     send_with_fallback(&client, &url, endpoint, body, cancel, &mut on_event).await
 }
 
+/// Model yang ditawarkan endpoint (untuk tombol "Ambil model" di Pengaturan AI).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+}
+
+const MAX_MODELS: usize = 500;
+
+/// Ambil daftar model: Anthropic `GET /models` (berhalaman), OpenAI-compatible `GET /models`.
+/// Memakai pengaman endpoint yang sama dengan chat (https publik, IP dipin, tanpa redirect).
+pub async fn list_models(endpoint: &Endpoint) -> Result<Vec<ModelInfo>, AiError> {
+    #[cfg(any(test, feature = "test-endpoint"))]
+    if endpoint.base_url.starts_with("http://127.0.0.1:") {
+        let url = url::Url::parse(&endpoint.base_url).expect("test url");
+        return fetch_models(&http_client(None)?, &url, endpoint).await;
+    }
+    let (url, host, addrs) = check_endpoint(&endpoint.base_url).await?;
+    fetch_models(&http_client(Some((&host, &addrs)))?, &url, endpoint).await
+}
+
+async fn fetch_models(client: &reqwest::Client, base: &url::Url, endpoint: &Endpoint) -> Result<Vec<ModelInfo>, AiError> {
+    let redact = |text: String| if endpoint.api_key.len() >= 8 { text.replace(&endpoint.api_key, "[API key]") } else { text };
+    let target = format!("{}/models", base.as_str().trim_end_matches('/'));
+    let mut out: Vec<ModelInfo> = Vec::new();
+    let mut after: Option<String> = None;
+    for _ in 0..10 {
+        let mut page = url::Url::parse(&target).map_err(|_| AiError::Endpoint("Base URL tidak valid.".into()))?;
+        if endpoint.protocol == Protocol::Anthropic {
+            let mut q = page.query_pairs_mut();
+            q.append_pair("limit", "1000");
+            if let Some(a) = &after { q.append_pair("after_id", a); }
+        }
+        let request = client.get(page).timeout(Duration::from_secs(20));
+        let request = match endpoint.protocol {
+            Protocol::Anthropic => request.header("x-api-key", &endpoint.api_key).header("anthropic-version", "2023-06-01"),
+            Protocol::OpenAi => request.bearer_auth(&endpoint.api_key),
+        };
+        let response = request.send().await
+            .map_err(|e| AiError::Http(redact(format!("Koneksi ke endpoint AI gagal: {}", e.without_url()))))?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|e| AiError::Http(redact(format!("Gagal membaca daftar model: {}", e.without_url()))))?;
+        if bytes.len() > MAX_STREAM_BYTES {
+            return Err(AiError::Protocol("Daftar model terlalu besar.".into()));
+        }
+        let body: Json = serde_json::from_slice(&bytes).unwrap_or(Json::Null);
+        if !status.is_success() {
+            let detail: String = body.pointer("/error/message").and_then(Json::as_str).unwrap_or_default().chars().take(300).collect();
+            let hint = if status.as_u16() == 401 || status.as_u16() == 403 { " Periksa API key." } else { "" };
+            return Err(AiError::Http(redact(format!("Endpoint AI merespons HTTP {}. {detail}{hint}", status.as_u16()).trim().to_string())));
+        }
+        let Some(data) = body["data"].as_array() else {
+            return Err(AiError::Protocol("Endpoint tidak mengirim daftar model (field data).".into()));
+        };
+        for m in data {
+            let Some(id) = m["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 150 && !id.chars().any(char::is_control)) else { continue };
+            let name = m["display_name"].as_str().or(m["name"].as_str()).unwrap_or(id);
+            out.push(ModelInfo { id: id.to_string(), name: name.chars().take(150).collect() });
+        }
+        let more = endpoint.protocol == Protocol::Anthropic && body["has_more"] == true;
+        after = body["last_id"].as_str().map(str::to_owned);
+        if !more || after.is_none() || out.len() >= MAX_MODELS {
+            break;
+        }
+    }
+    out.truncate(MAX_MODELS);
+    let mut seen = std::collections::BTreeSet::new();
+    out.retain(|m| seen.insert(m.id.clone()));
+    if endpoint.protocol == Protocol::OpenAi {
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    Ok(out)
+}
+
 /// Endpoint+model yang menolak parameter thinking. Diingat selama proses berjalan supaya
 /// tiap langkah agen tidak membuang satu request gagal.
 static NO_THINKING: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
@@ -690,6 +764,32 @@ pub(crate) mod tests {
             }
         });
         (url::Url::parse(&format!("http://{addr}/v1")).unwrap(), seen)
+    }
+
+    #[tokio::test]
+    async fn lists_models_both_protocols() {
+        let (url, seen) = mock_status_sequence(vec![
+            (200, "{\"data\":[{\"id\":\"claude-opus-5-5\",\"display_name\":\"Claude Opus 5.5\"}],\"has_more\":true,\"last_id\":\"claude-opus-5-5\"}"),
+            (200, "{\"data\":[{\"id\":\"claude-sonnet-5-5\",\"display_name\":\"Claude Sonnet 5.5\"}],\"has_more\":false,\"last_id\":\"claude-sonnet-5-5\"}"),
+        ]).await;
+        let mut ep = endpoint(Protocol::Anthropic);
+        ep.base_url = url.to_string();
+        let models = list_models(&ep).await.unwrap();
+        assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["claude-opus-5-5", "claude-sonnet-5-5"]);
+        assert_eq!(models[0].name, "Claude Opus 5.5");
+        assert_eq!(seen.lock().unwrap().len(), 2);
+
+        let (url, _) = mock_status_sequence(vec![(200, "{\"object\":\"list\",\"data\":[{\"id\":\"zeta\"},{\"id\":\"alpha\"},{\"id\":\"alpha\"}]}")]).await;
+        let mut ep = endpoint(Protocol::OpenAi);
+        ep.base_url = url.to_string();
+        let models = list_models(&ep).await.unwrap();
+        assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["alpha", "zeta"]);
+
+        let (url, _) = mock_status_sequence(vec![(401, "{\"error\":{\"message\":\"invalid x-api-key sk-test-secret-123\"}}")]).await;
+        let mut ep = endpoint(Protocol::Anthropic);
+        ep.base_url = url.to_string();
+        let err = list_models(&ep).await.unwrap_err().to_string();
+        assert!(err.contains("401") && err.contains("Periksa API key") && !err.contains("sk-test-secret-123"), "{err}");
     }
 
     #[test]

@@ -1,0 +1,24 @@
+const { chromium } = require('playwright');
+(async () => {
+  const b = await chromium.launch();
+  const p = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage(); const res = {};
+  await p.goto('http://127.0.0.1:8799/');
+  await p.fill('input[type=password]', 'rahasia-admin-123'); await p.click('button[type=submit]');
+  await p.waitForSelector('.panel-root'); await p.waitForTimeout(800);
+  await p.goto('http://127.0.0.1:8799/pengaturan-ai'); await p.waitForTimeout(1500);
+  const url = p.locator('input[type=url]');
+  await url.fill('http://127.0.0.1:18900/v1');
+  await p.locator('select').first().selectOption('openai');
+  await p.locator('input[type=password]').fill('salah');
+  await p.click('button:has-text("Ambil model")'); await p.waitForTimeout(1500);
+  res.wrongKey = await p.locator('.notice').innerText();
+  await p.locator('input[type=password]').fill('sk-test');
+  await p.click('button:has-text("Ambil model")'); await p.waitForTimeout(1500);
+  res.found = await p.locator('.notice').innerText();
+  const pick = p.locator('label:has-text("Model dari endpoint") select');
+  res.options = await pick.locator('option').allInnerTexts();
+  await pick.selectOption('qwen-max');
+  res.modelInput = await p.locator('input[placeholder="Ketik, atau tekan Ambil model"]').inputValue();
+  await p.screenshot({ path: 'shots/ambil-model.png' });
+  console.log(JSON.stringify(res, null, 1)); await b.close();
+})();

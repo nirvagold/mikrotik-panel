@@ -41,5 +41,9 @@ class H(BaseHTTPRequestHandler):
             b=p.encode(); self.wfile.write(b'%x\r\n'%len(b)+b+b'\r\n'); self.wfile.flush()
             time.sleep(0.08 if 'lambat' not in ut else 0.15)
         self.wfile.write(b'0\r\n\r\n')
+    def do_GET(self):
+        ok=self.headers.get('authorization')=='Bearer sk-test'
+        b=json.dumps({'object':'list','data':[{'id':'gpt-mini'},{'id':'deepseek-chat'},{'id':'qwen-max'}]} if ok else {'error':{'message':'bad key'}}).encode()
+        self.send_response(200 if ok else 401); self.send_header('content-type','application/json'); self.send_header('content-length',str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self,*a): pass
 ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),H).serve_forever()

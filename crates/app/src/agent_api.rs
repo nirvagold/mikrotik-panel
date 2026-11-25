@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use panel_agent::ai::Thinking;
+use panel_agent::ai::{Endpoint, Protocol, Thinking, list_models};
 use panel_agent::design::default_spec;
 use panel_agent::runner::{Ended, run_turn};
 use panel_core::crypto::{Cipher, random_token};
@@ -38,6 +38,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/agent/proposals/{id}/reject", post(reject))
         .route("/api/agent/proposals/{id}/revert", post(revert_proposal))
         .route("/api/settings/ai", get(ai_get).put(ai_put))
+        .route("/api/settings/ai/models", post(ai_models))
 }
 
 fn fail(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -695,6 +696,51 @@ struct AiBody {
     api_key: Option<String>,
     #[serde(default)]
     thinking: Thinking,
+}
+
+#[derive(Deserialize)]
+struct ModelsBody {
+    url: String,
+    protocol: String,
+    api_key: Option<String>,
+}
+
+/// Tombol "Ambil model": daftar model dari endpoint yang sedang diisi di form. API key boleh
+/// kosong bila endpoint dan protokolnya sama dengan yang tersimpan (key lama dipakai).
+async fn ai_models(State(st): State<Shared>, Json(b): Json<ModelsBody>) -> Response {
+    let key = b.api_key.unwrap_or_default().trim().to_string();
+    #[cfg(feature = "test-endpoint")]
+    let local_test = b.url.starts_with("http://127.0.0.1:");
+    #[cfg(not(feature = "test-endpoint"))]
+    let local_test = false;
+    if !["openai", "anthropic"].contains(&b.protocol.as_str()) || !(b.url.starts_with("https://") || local_test) || b.url.len() > 500
+        || key.len() > 2000 || key.chars().any(char::is_control)
+    {
+        return fail(StatusCode::BAD_REQUEST, "Isi endpoint https:// dan protokol openai/anthropic dulu.");
+    }
+    let key = if !key.is_empty() {
+        key
+    } else {
+        let saved: Option<String> = st.store
+            .run(|c| c.query_row("SELECT value FROM settings WHERE key = 'ai'", [], |r| r.get(0)).optional())
+            .await.ok().flatten();
+        let saved: Value = saved.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or(json!({}));
+        if saved["url"] != b.url.as_str() || saved["protocol"] != b.protocol.as_str() {
+            return fail(StatusCode::BAD_REQUEST, "Masukkan API key untuk endpoint ini dulu.");
+        }
+        let Ok(cipher) = Cipher::from_base64(&st.config.secret_key) else { return fail(StatusCode::INTERNAL_SERVER_ERROR, "Kunci panel tidak valid.") };
+        match cipher.decrypt(saved["encrypted_key"].as_str().unwrap_or_default()) {
+            Ok(k) => k,
+            Err(_) => return fail(StatusCode::BAD_REQUEST, "Simpan ulang API key di Pengaturan AI."),
+        }
+    };
+    let protocol = if b.protocol == "anthropic" { Protocol::Anthropic } else { Protocol::OpenAi };
+    let endpoint = Endpoint { protocol, base_url: b.url, model: String::new(), api_key: key, thinking: Thinking::Off };
+    match list_models(&endpoint).await {
+        Ok(models) if models.is_empty() => fail(StatusCode::BAD_GATEWAY, "Endpoint tidak mengirim satu model pun."),
+        Ok(models) => Json(json!({ "models": models })).into_response(),
+        Err(e) => fail(StatusCode::BAD_GATEWAY, e.to_string()),
+    }
 }
 
 async fn ai_put(State(st): State<Shared>, Json(b): Json<AiBody>) -> Response {

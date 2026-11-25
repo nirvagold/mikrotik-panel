@@ -124,6 +124,17 @@ function AiSettings() {
   const [form, setForm] = useState({ url: '', protocol: 'anthropic', model: '', api_key: '', thinking: 'high' });
   const [hasKey, setHasKey] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [models, setModels] = useState<{ id: string; name: string }[] | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const fetchModels = async () => {
+    setFetching(true); setNotice(null);
+    try {
+      const r = await post<{ models: { id: string; name: string }[] }>('/api/settings/ai/models', { url: form.url, protocol: form.protocol, api_key: form.api_key || null });
+      setModels(r.models);
+      setNotice(`${r.models.length} model ditemukan. Pilih salah satu, lalu Simpan.`);
+    } catch (err) { setModels(null); setNotice((err as Error).message); }
+    finally { setFetching(false); }
+  };
   useEffect(() => {
     get<{ url: string | null; protocol: string | null; model: string | null; has_key: boolean; thinking?: string }>('/api/settings/ai').then(s => {
       setForm(f => ({ ...f, url: s.url ?? 'https://api.anthropic.com/v1', protocol: s.protocol ?? 'anthropic', model: s.model ?? '', thinking: s.thinking ?? 'high' }));
@@ -143,11 +154,18 @@ function AiSettings() {
       <h2 class="block-title">Pengaturan AI</h2>
       <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
       <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
-      <label>Model<input value={form.model} onInput={set('model')} required maxLength={150} /></label>
+      <label>API key<input type="password" autocomplete="off" value={form.api_key} onInput={set('api_key')} placeholder={hasKey ? 'Tersimpan; kosongkan untuk tetap memakai key lama' : ''} /></label>
+      <label>Model<span class="row">
+        <input style={{ flex: 1, minWidth: 0 }} value={form.model} onInput={set('model')} required maxLength={150} placeholder="Ketik, atau tekan Ambil model" />
+        <button type="button" class="ghost" onClick={() => void fetchModels()} disabled={fetching || !form.url}>{fetching ? 'Mengambil…' : 'Ambil model'}</button>
+      </span></label>
+      {models && models.length > 0 && <label>Model dari endpoint<select value={models.some(m => m.id === form.model) ? form.model : ''} onChange={e => setForm({ ...form, model: (e.target as HTMLSelectElement).value })}>
+        <option value="" disabled>Pilih model…</option>
+        {models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} (${m.id})`}</option>)}
+      </select></label>}
       <label>Kedalaman berpikir<select value={form.thinking} onChange={set('thinking')}>
         <option value="high">Tinggi (bawaan)</option><option value="max">Maksimal</option><option value="medium">Sedang</option><option value="low">Rendah</option><option value="off">Mati</option>
       </select><span class="muted">Lebih tinggi = jawaban lebih matang, tapi lebih lambat dan lebih banyak token. Model yang tidak mendukung otomatis dipakai tanpa mode ini.</span></label>
-      <label>API key<input type="password" autocomplete="off" value={form.api_key} onInput={set('api_key')} placeholder={hasKey ? 'Tersimpan; kosongkan untuk tetap memakai key lama' : ''} /></label>
       <div class="row"><button type="submit">Simpan</button></div>
       {notice && <p class="notice">{notice}</p>}
     </form>
