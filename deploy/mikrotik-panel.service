@@ -4,7 +4,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/opt/mikrotik-panel/current/mikrotik-panel serve --config /etc/mikrotik-panel/config.toml
+# Config tetap milik root dengan izin 600. systemd menyalin salinannya ke direktori kredensial
+# privat layanan (%d) yang hanya bisa dibaca user dinamis panel. Butuh systemd 248+ (Ubuntu 22.04+).
+LoadCredential=config.toml:/etc/mikrotik-panel/config.toml
+ExecStart=/opt/mikrotik-panel/current/mikrotik-panel serve --config %d/config.toml
 Restart=on-failure
 RestartSec=3
 DynamicUser=yes

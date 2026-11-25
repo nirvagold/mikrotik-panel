@@ -26,6 +26,8 @@ ask_secret() { # ask_secret VAR "pertanyaan"
 
 [ "$(id -u)" = 0 ] || die "jalankan dengan sudo"
 command -v systemctl >/dev/null || die "butuh systemd"
+SYSTEMD_VER=$(systemctl --version | sed -n '1s/^systemd \([0-9]*\).*/\1/p')
+[ "${SYSTEMD_VER:-0}" -ge 248 ] || die "butuh systemd 248+ (Ubuntu 22.04 atau lebih baru); terpasang: ${SYSTEMD_VER:-?}"
 command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl; }
 case "$(uname -m)" in x86_64|amd64) ARCH=x86_64 ;; aarch64|arm64) ARCH=aarch64 ;; *) die "arsitektur $(uname -m) belum didukung" ;; esac
 
@@ -91,6 +93,9 @@ REPO="$REPO"
 KEEP=3
 HEALTH_TIMEOUT=45
 EOF
+# Drop-in lama yang mengubah izin config tidak dibutuhkan lagi, tapi dibiarkan bila ada:
+# layanan membaca config lewat LoadCredential, jadi izin 600 root tetap berlaku.
+[ -d /etc/systemd/system/mikrotik-panel.service.d ] && say "Catatan: ada drop-in di /etc/systemd/system/mikrotik-panel.service.d/ (dibiarkan)"
 systemctl daemon-reload
 systemctl enable "mikrotik-panel.service" >/dev/null
 
