@@ -26,12 +26,32 @@ pub enum Protocol {
     Anthropic,
 }
 
+/// Seberapa dalam model berpikir sebelum menjawab. Bawaan: tinggi (pilihan Usep 2026-11-25).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Thinking {
+    Off,
+    Low,
+    Medium,
+    #[default]
+    High,
+    Max,
+}
+
+impl Thinking {
+    /// Nilai dari pengaturan tersimpan; kosong atau tidak dikenal = bawaan (tinggi).
+    pub fn parse(value: &str) -> Self {
+        serde_json::from_value(json!(value)).unwrap_or_default()
+    }
+}
+
 #[derive(Clone)]
 pub struct Endpoint {
     pub protocol: Protocol,
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    pub thinking: Thinking,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +221,17 @@ pub fn build_body(endpoint: &Endpoint, first_party: bool, system: &str, messages
             if !tool_defs.is_empty() {
                 body["tools"] = Json::Array(tool_defs);
             }
+            let effort = match endpoint.thinking {
+                Thinking::Off => None,
+                Thinking::Low => Some("low"),
+                Thinking::Medium => Some("medium"),
+                Thinking::High => Some("high"),
+                Thinking::Max => Some("max"),
+            };
+            if let Some(effort) = effort {
+                body["thinking"] = json!({"type": "adaptive"});
+                body["output_config"] = json!({"effort": effort});
+            }
             body
         }
         Protocol::OpenAi => {
@@ -234,6 +265,15 @@ pub fn build_body(endpoint: &Endpoint, first_party: bool, system: &str, messages
                 }
             }
             let mut body = json!({"model": endpoint.model, "max_tokens": max_tokens, "stream": true, "messages": msgs});
+            let effort = match endpoint.thinking {
+                Thinking::Off => None,
+                Thinking::Low => Some("low"),
+                Thinking::Medium => Some("medium"),
+                Thinking::High | Thinking::Max => Some("high"),
+            };
+            if let Some(effort) = effort {
+                body["reasoning_effort"] = json!(effort);
+            }
             if !tools.is_empty() {
                 body["tools"] = Json::Array(tools.iter().map(|t| json!({"type": "function", "function": {
                     "name": t.name, "description": t.description, "parameters": t.input_schema}})).collect());
@@ -252,16 +292,62 @@ pub async fn stream_turn(
     cancel: &CancellationToken,
     on_event: impl FnMut(Event),
 ) -> Result<Reply, AiError> {
+    let mut on_event = on_event;
     #[cfg(any(test, feature = "test-endpoint"))]
     if endpoint.base_url.starts_with("http://127.0.0.1:") {
         let url = url::Url::parse(&endpoint.base_url).expect("test url");
         let body = build_body(endpoint, false, system, messages, tools, DEFAULT_MAX_TOKENS);
-        return send(&http_client(None)?, &url, endpoint, &body, cancel, on_event).await;
+        return send_with_fallback(&http_client(None)?, &url, endpoint, body, cancel, &mut on_event).await;
     }
     let (url, host, addrs) = check_endpoint(&endpoint.base_url).await?;
     let client = http_client(Some((&host, &addrs)))?;
     let body = build_body(endpoint, is_first_party(&url), system, messages, tools, DEFAULT_MAX_TOKENS);
-    send(&client, &url, endpoint, &body, cancel, on_event).await
+    send_with_fallback(&client, &url, endpoint, body, cancel, &mut on_event).await
+}
+
+/// Endpoint+model yang menolak parameter thinking. Diingat selama proses berjalan supaya
+/// tiap langkah agen tidak membuang satu request gagal.
+static NO_THINKING: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn strip_thinking(body: &mut Json) -> bool {
+    let Some(obj) = body.as_object_mut() else { return false };
+    let a = obj.remove("thinking").is_some();
+    let b = obj.remove("output_config").is_some();
+    let c = obj.remove("reasoning_effort").is_some();
+    a || b || c
+}
+
+/// Penolakan HTTP 400 yang menyebut parameter thinking/effort: model tidak mendukungnya.
+fn rejects_thinking(err: &AiError) -> bool {
+    let AiError::Http(msg) = err else { return false };
+    let lower = msg.to_lowercase();
+    lower.contains("http 400") && ["thinking", "effort", "reasoning", "output_config"].iter().any(|k| lower.contains(k))
+}
+
+async fn send_with_fallback(
+    client: &reqwest::Client,
+    base: &url::Url,
+    endpoint: &Endpoint,
+    mut body: Json,
+    cancel: &CancellationToken,
+    on_event: &mut impl FnMut(Event),
+) -> Result<Reply, AiError> {
+    let key = (endpoint.base_url.clone(), endpoint.model.clone());
+    let known = NO_THINKING.lock().map(|l| l.contains(&key)).unwrap_or(false);
+    if known {
+        strip_thinking(&mut body);
+    }
+    match send(client, base, endpoint, &body, cancel, &mut *on_event).await {
+        Err(e) if !known && rejects_thinking(&e) && strip_thinking(&mut body) => {
+            if let Ok(mut l) = NO_THINKING.lock() {
+                if l.len() < 64 {
+                    l.push(key);
+                }
+            }
+            send(client, base, endpoint, &body, cancel, on_event).await
+        }
+        other => other,
+    }
 }
 
 async fn send(
@@ -573,8 +659,89 @@ pub(crate) mod tests {
         url::Url::parse(&format!("http://{addr}/v1")).unwrap()
     }
 
+    /// Server palsu: tiap koneksi menjawab (status, body) berurutan dan mencatat body request.
+    async fn mock_status_sequence(replies: Vec<(u16, &'static str)>) -> (url::Url, std::sync::Arc<std::sync::Mutex<Vec<Json>>>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut n = 0usize;
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let (status, body) = replies[n.min(replies.len() - 1)];
+                n += 1;
+                let mut raw = Vec::new();
+                let mut buf = vec![0u8; 65536];
+                loop {
+                    let k = socket.read(&mut buf).await.unwrap_or(0);
+                    raw.extend_from_slice(&buf[..k]);
+                    let text = String::from_utf8_lossy(&raw).to_string();
+                    if let Some(i) = text.find("\r\n\r\n") {
+                        let len = text.lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                        if raw.len() >= i + 4 + len || k == 0 {
+                            log.lock().unwrap().push(serde_json::from_slice::<Json>(&raw[i + 4..]).unwrap_or(Json::Null));
+                            break;
+                        }
+                    } else if k == 0 { break; }
+                }
+                let head = format!("HTTP/1.1 {status} X\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(body.as_bytes()).await;
+            }
+        });
+        (url::Url::parse(&format!("http://{addr}/v1")).unwrap(), seen)
+    }
+
+    #[test]
+    fn thinking_params_per_protocol() {
+        let msgs = vec![Message { role: Role::User, parts: vec![Part::Text { text: "hai".into() }] }];
+        let a = build_body(&endpoint(Protocol::Anthropic), true, "sys", &msgs, &[], 1000);
+        assert_eq!(a["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(a["output_config"], json!({"effort": "high"}));
+        let o = build_body(&endpoint(Protocol::OpenAi), false, "sys", &msgs, &[], 1000);
+        assert_eq!(o["reasoning_effort"], "high");
+        let mut off = endpoint(Protocol::Anthropic);
+        off.thinking = Thinking::Off;
+        let b = build_body(&off, true, "sys", &msgs, &[], 1000);
+        assert!(b.get("thinking").is_none() && b.get("output_config").is_none());
+        assert_eq!(Thinking::parse(""), Thinking::High);
+        assert_eq!(Thinking::parse("medium"), Thinking::Medium);
+    }
+
+    #[tokio::test]
+    async fn retries_without_thinking_when_model_rejects_it() {
+        let ok = "data: {\"choices\":[{\"delta\":{\"content\":\"Oke\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let (url, seen) = mock_status_sequence(vec![
+            (400, "{\"error\":{\"message\":\"Unrecognized request argument supplied: reasoning_effort\"}}"),
+            (200, ok),
+            (200, ok),
+        ]).await;
+        let mut ep = endpoint(Protocol::OpenAi);
+        ep.base_url = url.to_string();
+        let msgs = vec![Message { role: Role::User, parts: vec![Part::Text { text: "hai".into() }] }];
+        let reply = stream_turn(&ep, "sys", &msgs, &[], &CancellationToken::new(), |_| {}).await.unwrap();
+        assert_eq!(reply.parts[0], Part::Text { text: "Oke".into() });
+        // Giliran berikutnya langsung tanpa parameter thinking (diingat).
+        stream_turn(&ep, "sys", &msgs, &[], &CancellationToken::new(), |_| {}).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[0]["reasoning_effort"], "high");
+        assert!(seen[1].get("reasoning_effort").is_none());
+        assert!(seen[2].get("reasoning_effort").is_none());
+    }
+
+    #[tokio::test]
+    async fn other_400_is_not_retried() {
+        let (url, seen) = mock_status_sequence(vec![(400, "{\"error\":{\"message\":\"messages: field required\"}}")]).await;
+        let mut ep = endpoint(Protocol::Anthropic);
+        ep.base_url = url.to_string();
+        let msgs = vec![Message { role: Role::User, parts: vec![Part::Text { text: "hai".into() }] }];
+        assert!(stream_turn(&ep, "sys", &msgs, &[], &CancellationToken::new(), |_| {}).await.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
     fn endpoint(protocol: Protocol) -> Endpoint {
-        Endpoint { protocol, base_url: String::new(), model: "m".into(), api_key: "sk-test-secret-123".into() }
+        Endpoint { protocol, base_url: String::new(), model: "m".into(), api_key: "sk-test-secret-123".into(), thinking: Thinking::High }
     }
 
     #[tokio::test]

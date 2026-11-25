@@ -121,12 +121,12 @@ function Audit() {
 }
 
 function AiSettings() {
-  const [form, setForm] = useState({ url: '', protocol: 'anthropic', model: '', api_key: '' });
+  const [form, setForm] = useState({ url: '', protocol: 'anthropic', model: '', api_key: '', thinking: 'high' });
   const [hasKey, setHasKey] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
-    get<{ url: string | null; protocol: string | null; model: string | null; has_key: boolean }>('/api/settings/ai').then(s => {
-      setForm(f => ({ ...f, url: s.url ?? 'https://api.anthropic.com/v1', protocol: s.protocol ?? 'anthropic', model: s.model ?? '' }));
+    get<{ url: string | null; protocol: string | null; model: string | null; has_key: boolean; thinking?: string }>('/api/settings/ai').then(s => {
+      setForm(f => ({ ...f, url: s.url ?? 'https://api.anthropic.com/v1', protocol: s.protocol ?? 'anthropic', model: s.model ?? '', thinking: s.thinking ?? 'high' }));
       setHasKey(s.has_key);
     }).catch(e => setNotice(e.message));
   }, []);
@@ -144,6 +144,9 @@ function AiSettings() {
       <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
       <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
       <label>Model<input value={form.model} onInput={set('model')} required maxLength={150} /></label>
+      <label>Kedalaman berpikir<select value={form.thinking} onChange={set('thinking')}>
+        <option value="high">Tinggi (bawaan)</option><option value="max">Maksimal</option><option value="medium">Sedang</option><option value="low">Rendah</option><option value="off">Mati</option>
+      </select><span class="muted">Lebih tinggi = jawaban lebih matang, tapi lebih lambat dan lebih banyak token. Model yang tidak mendukung otomatis dipakai tanpa mode ini.</span></label>
       <label>API key<input type="password" autocomplete="off" value={form.api_key} onInput={set('api_key')} placeholder={hasKey ? 'Tersimpan; kosongkan untuk tetap memakai key lama' : ''} /></label>
       <div class="row"><button type="submit">Simpan</button></div>
       {notice && <p class="notice">{notice}</p>}

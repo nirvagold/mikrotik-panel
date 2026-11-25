@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use panel_agent::ai::Thinking;
 use panel_agent::design::default_spec;
 use panel_agent::runner::{Ended, run_turn};
 use panel_core::crypto::{Cipher, random_token};
@@ -573,9 +574,10 @@ async fn ai_get(State(st): State<Shared>) -> Response {
     match r {
         Ok(Some(v)) => {
             let v: Value = serde_json::from_str(&v).unwrap_or(json!({}));
-            Json(json!({ "url": v["url"], "protocol": v["protocol"], "model": v["model"], "has_key": v["encrypted_key"].is_string() })).into_response()
+            Json(json!({ "url": v["url"], "protocol": v["protocol"], "model": v["model"], "has_key": v["encrypted_key"].is_string(),
+                "thinking": Thinking::parse(v["thinking"].as_str().unwrap_or_default()) })).into_response()
         }
-        Ok(None) => Json(json!({ "url": null, "protocol": null, "model": null, "has_key": false }))
+        Ok(None) => Json(json!({ "url": null, "protocol": null, "model": null, "has_key": false, "thinking": Thinking::High }))
             .into_response(),
         Err(err) => internal(err),
     }
@@ -587,6 +589,8 @@ struct AiBody {
     protocol: String,
     model: String,
     api_key: Option<String>,
+    #[serde(default)]
+    thinking: Thinking,
 }
 
 async fn ai_put(State(st): State<Shared>, Json(b): Json<AiBody>) -> Response {
@@ -621,7 +625,7 @@ async fn ai_put(State(st): State<Shared>, Json(b): Json<AiBody>) -> Response {
                 None
             };
             let Some(encrypted) = encrypted else { return Ok(false) };
-            let v = json!({ "url": b.url, "protocol": b.protocol, "model": b.model.trim(), "encrypted_key": encrypted });
+            let v = json!({ "url": b.url, "protocol": b.protocol, "model": b.model.trim(), "encrypted_key": encrypted, "thinking": b.thinking });
             c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ai', ?1)", [v.to_string()])?;
             Ok(true)
         })
@@ -765,7 +769,13 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let (_, v) = call(&app, req("GET", "/api/settings/ai", "", &h)).await;
         assert_eq!(v["has_key"], true);
+        assert_eq!(v["thinking"], "high");
         assert!(!v.to_string().contains("sk-1"));
+        let (s, _) = call(&app, req("PUT", "/api/settings/ai", r#"{"url":"https://api.example.com/v1","protocol":"openai","model":"m","api_key":null,"thinking":"low"}"#, &h)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, v) = call(&app, req("GET", "/api/settings/ai", "", &h)).await;
+        assert_eq!(v["thinking"], "low");
+        assert_eq!(v["has_key"], true);
     }
 
     #[tokio::test]

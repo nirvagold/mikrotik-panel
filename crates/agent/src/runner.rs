@@ -367,7 +367,7 @@ mod tests {
     impl Host for Fake {
         fn publish(&self, kind: &'static str, data: Json) { self.events.lock().unwrap().push((kind, data)); }
         async fn endpoint(&self) -> Result<Endpoint, String> {
-            Ok(Endpoint { protocol: Protocol::Anthropic, base_url: self.url.clone(), model: "m".into(), api_key: "k".into() })
+            Ok(Endpoint { protocol: Protocol::Anthropic, base_url: self.url.clone(), model: "m".into(), api_key: "k".into(), thinking: Default::default() })
         }
         async fn load_messages(&self, _: &str) -> Result<Vec<Message>, String> { Ok(vec![]) }
         async fn append_message(&self, _: &str, m: &Message, _: Option<&str>) -> Result<(), String> {

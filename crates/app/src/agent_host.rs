@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use panel_agent::ai::{Endpoint, Message, Protocol};
+use panel_agent::ai::{Endpoint, Message, Protocol, Thinking};
 use panel_agent::design::{DesignSpec, default_spec};
 use panel_agent::router_tools::{self, RouterApi};
 use panel_agent::runner::{Host, Proposal};
@@ -127,6 +127,7 @@ impl Host for AppHost {
             base_url: v["url"].as_str().unwrap_or_default().to_string(),
             model: v["model"].as_str().unwrap_or_default().to_string(),
             api_key,
+            thinking: Thinking::parse(v["thinking"].as_str().unwrap_or_default()),
         })
     }
 
