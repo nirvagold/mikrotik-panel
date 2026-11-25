@@ -40,7 +40,11 @@ export function startDesign(panelRoot: HTMLElement) {
     if (viewing.value !== 'draft') viewing.value = 'draft';
     render(data.spec, opTarget(data.op));
   });
-  on('design.version', () => { redoStack.length = 0; void loadDesign(); });
+  on('design.version', (d: { source?: string }) => {
+    // Undo/redo admin sendiri juga mengumumkan versi baru (source "revert"): jangan hapus riwayat redo.
+    if (d?.source !== 'revert') redoStack.length = 0;
+    void loadDesign();
+  });
   on('design.viewport', (data: { size: 'desktop' | 'tablet' | 'phone' }) => root && setViewport(root, data.size));
   on('resync', () => void loadDesign());
   void loadDesign();

@@ -1,0 +1,75 @@
+const { chromium } = require('playwright');
+const out = (n) => `shots/${n}.png`;
+(async () => {
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ viewport: { width: 1400, height: 860 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { const o = Element.prototype.attachShadow; Element.prototype.attachShadow = function (i) { return o.call(this, { ...i, mode: 'open' }); }; });
+  const p = await ctx.newPage();
+  const errs = []; p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); }); p.on('pageerror', e => errs.push(String(e)));
+  const res = {};
+  await p.goto('http://127.0.0.1:8799/');
+  await p.fill('input[type=password]', 'rahasia-admin-123');
+  await p.click('button[type=submit]');
+  await p.waitForSelector('.panel-root', { timeout: 10000 });
+  await p.waitForTimeout(1500);
+  await p.screenshot({ path: out('0-awal') });
+  const accent = () => p.evaluate(() => getComputedStyle(document.querySelector('.panel-root')).getPropertyValue('--accent').trim());
+  res.accentBefore = await accent();
+  const navCount = () => p.evaluate(() => performance.getEntriesByType('navigation').length + ':' + (window.__marker || 'none'));
+  await p.evaluate(() => { window.__marker = 'tidak-reload'; });
+  // open agent
+  const l = p.locator('[aria-label="Buka agen AI (Ctrl+K)"]'); if (await l.count()) await l.click();
+  const ta = p.locator('textarea[aria-label="Pesan untuk agen"]');
+  await ta.waitFor();
+  // Shift+Enter newline
+  await ta.type('Ganti warna jadi hijau toska');
+  await ta.press('Shift+Enter');
+  await ta.type('dan tambah catatan di ringkasan');
+  res.textareaValue = await ta.inputValue();
+  await ta.press('Enter');
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: out('1-streaming') });
+  await p.waitForFunction(() => getComputedStyle(document.querySelector('.panel-root')).getPropertyValue('--accent').trim() !== '#4f46e5', null, { timeout: 15000 }).catch(() => {});
+  await p.waitForTimeout(2500);
+  res.accentAfter = await accent();
+  res.noteVisible = await p.locator('text=Catatan dari agen').count();
+  res.marker = await navCount();
+  await p.screenshot({ path: out('2-setelah-desain') });
+  // undo
+  await ta.focus(); await p.keyboard.type('/undo'); await p.keyboard.press('Enter');
+  await p.waitForTimeout(1500);
+  res.accentAfterUndo = await accent();
+  res.noteAfterUndo = await p.locator('text=Catatan dari agen').count();
+  await p.screenshot({ path: out('3-setelah-undo') });
+  await ta.focus(); await p.keyboard.type('/redo'); await p.keyboard.press('Enter');
+  await p.waitForTimeout(1500);
+  res.accentAfterRedo = await accent();
+  // proposal
+  await ta.focus(); await p.keyboard.type('Tolong putus sesi budi'); await p.keyboard.press('Enter');
+  await p.waitForTimeout(4000);
+  await p.screenshot({ path: out('4-kartu-persetujuan') });
+  res.cardTitle = await p.locator('.card-head b').last().innerText();
+  res.cardReason = await p.locator('.card-reason').last().innerText().catch(() => null);
+  await p.locator('.card button:has-text("Setujui")').last().click();
+  await p.waitForTimeout(3000);
+  res.cardStatus = await p.locator('.card-status').last().innerText().catch(() => null);
+  await p.screenshot({ path: out('4b-disetujui') });
+  // stop
+  await ta.focus(); await p.keyboard.type('jawab lambat'); await p.keyboard.press('Enter');
+  await p.waitForTimeout(2000);
+  await p.screenshot({ path: out('5a-sedang-mengetik') });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(2000);
+  await p.screenshot({ path: out('5-stop') });
+  res.stoppedKept = await p.locator('text=dihentikan').count();
+  await p.reload(); await p.waitForTimeout(2500);
+  res.afterReloadAccent = await accent();
+  res.afterReloadHasHistory = await p.locator('text=Tolong putus sesi budi').count();
+  res.afterReloadStopped = await p.locator('text=dihentikan').count();
+  await p.screenshot({ path: out('6-setelah-reload') });
+  await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(800);
+  await p.screenshot({ path: out('7-hp') });
+  res.errors = errs;
+  console.log(JSON.stringify(res, null, 1));
+  await b.close();
+})();

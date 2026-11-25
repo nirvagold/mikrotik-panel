@@ -57,9 +57,13 @@ export function applyDesign(spec: DesignSpec, root: HTMLElement): boolean {
 
 /** Bungkus perubahan DOM dengan View Transition bila browser mendukung. */
 export function transition(update: () => void) {
-  const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
-  if (doc.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) doc.startViewTransition(update);
-  else update();
+  type VT = { ready: Promise<void>; finished: Promise<void>; updateCallbackDone: Promise<void> };
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => VT };
+  if (!doc.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return update();
+  // Patch beruntun membatalkan animasi sebelumnya; itu normal, jangan jadi error di konsol.
+  const t = doc.startViewTransition(update);
+  const quiet = () => {};
+  t.ready.catch(quiet); t.finished.catch(quiet); t.updateCallbackDone.catch(quiet);
 }
 
 /** Sorot sebentar blok yang baru diubah agen. */

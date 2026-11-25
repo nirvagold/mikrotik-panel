@@ -49,6 +49,7 @@ button { font: inherit; cursor: pointer; }
 .confirm { flex: 1 1 100%; display: grid; gap: 4px; font-size: 12px; color: var(--muted, #9aa3b2); }
 .confirm input { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border, #2a2f3a); background: var(--bg, #0f1115); color: inherit; }
 .card-status { margin: 4px 0 0; color: var(--muted, #9aa3b2); font-size: 13px; }
+.card-reason { margin: 4px 0 6px; color: var(--muted, #9aa3b2); font-size: 13px; }
 .primary, .danger, .ghost { padding: 6px 12px; border-radius: 8px; border: 1px solid transparent; font-weight: 600; }
 .primary { background: var(--accent, #8b83ff); color: var(--on-accent, #0f1115); }
 .danger { background: var(--danger, #ff6b6b); color: #fff; }

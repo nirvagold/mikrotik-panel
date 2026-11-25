@@ -108,14 +108,26 @@ pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, ca
 
     'steps: for _ in 0..MAX_AGENT_STEPS {
         let conv = conversation.to_string();
+        let mut partial = String::new();
         let reply = ai::stream_turn(&endpoint, SYSTEM_PROMPT, &history, &catalog, cancel, |event| match event {
-            Event::TextDelta(text) => host.publish("chat.delta", json!({"conversation": conv, "text": text})),
+            Event::TextDelta(text) => {
+                partial.push_str(&text);
+                host.publish("chat.delta", json!({"conversation": conv, "text": text}))
+            }
             Event::ToolStart { name, .. } => host.publish("chat.tool", json!({"conversation": conv, "name": name, "status": "started"})),
             Event::Thinking => host.publish("chat.thinking", json!({"conversation": conv})),
         }).await;
         let reply = match reply {
             Ok(r) => r,
-            Err(AiError::Cancelled) => { ended = Ended::Cancelled; break; }
+            Err(AiError::Cancelled) => {
+                // Seperti Claude: teks yang sudah tampil tetap disimpan saat admin menekan Stop.
+                if !partial.trim().is_empty() {
+                    let kept = Message { role: Role::Assistant, parts: vec![Part::Text { text: format!("{partial}\n\n(dihentikan)") }] };
+                    let _ = host.append_message(conversation, &kept, None).await;
+                }
+                ended = Ended::Cancelled;
+                break;
+            }
             Err(e) => { ended = Ended::Error(e.to_string()); break; }
         };
         let assistant = Message { role: Role::Assistant, parts: reply.parts.clone() };

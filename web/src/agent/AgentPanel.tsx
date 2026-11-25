@@ -352,7 +352,8 @@ function Card({ card, typed, onType, onDecide }: { card: ProposalCard; typed: st
   const phrase = card.label.trim().toLowerCase();
   return (
     <div class={`card ${card.permission} ${card.status}`}>
-      <div class="card-head"><span class="badge">{critical ? 'Kritis' : 'Perlu persetujuan'}</span> <b>{card.label}</b></div>
+      <div class="card-head"><span class="badge">{critical ? 'Kritis' : 'Perlu persetujuan'}</span> <b>{TOOL_LABELS[card.tool] ?? card.label}</b></div>
+      {typeof card.input?.reason === 'string' && <p class="card-reason">{card.input.reason}</p>}
       {card.preview && <pre class="cli"><code>{card.preview}</code></pre>}
       {card.status === 'pending' ? (
         <div class="card-actions">
