@@ -1,51 +1,285 @@
 {
-  "tokens": {
-    "mode": "system",
-    "light": {"bg": "#f5f6f8", "surface": "#ffffff", "surface_alt": "#eef0f4", "text": "#1b1f27",
-              "muted": "#5b6474", "border": "#d9dde5", "accent": "#4f46e5", "on_accent": "#ffffff",
-              "ok": "#16794c", "warn": "#9a6700", "danger": "#c0262d"},
-    "dark":  {"bg": "#0f1115", "surface": "#171a21", "surface_alt": "#1e222b", "text": "#e7e9ee",
-              "muted": "#9aa3b2", "border": "#2a2f3a", "accent": "#8b83ff", "on_accent": "#0f1115",
-              "ok": "#4cc38a", "warn": "#e2b340", "danger": "#ff6b6b"},
-    "font": "system", "font_mono": "mono", "font_size": 15, "radius": 10, "density": 100, "shadow": "soft"
+ "tokens": {
+  "mode": "dark",
+  "light": {
+   "bg": "#f5f6f8",
+   "surface": "#ffffff",
+   "surface_alt": "#eef0f4",
+   "text": "#1b1f27",
+   "muted": "#5b6474",
+   "border": "#d9dde5",
+   "accent": "#4f46e5",
+   "on_accent": "#ffffff",
+   "ok": "#16794c",
+   "warn": "#9a6700",
+   "danger": "#c0262d"
   },
-  "nav": {"position": "left", "items": [
-    {"page": "ringkasan", "label": "Ringkasan", "icon": "◫"},
-    {"page": "pelanggan", "label": "Pelanggan", "icon": "◎"},
-    {"page": "router", "label": "Router", "icon": "◇"},
-    {"page": "aksi", "label": "Tombol aksi", "icon": "▶"},
-    {"page": "riwayat", "label": "Riwayat", "icon": "≡"},
-    {"page": "agen", "label": "Agen AI", "icon": "✧"},
-    {"page": "memori", "label": "Memori agen", "icon": "◌"},
-    {"page": "pengaturan-ai", "label": "Pengaturan AI", "icon": "⚙"}
-  ]},
-  "pages": [
-    {"id": "ringkasan", "title": "Ringkasan jaringan", "columns": 3, "blocks": [
-      {"id": "metrik-utama", "span": 3, "kind": "metrics", "props": {"items": ["customers_online", "customers_total", "low_quota", "cpu", "memory", "traffic_today"]}},
-      {"id": "trafik", "span": 2, "kind": "traffic_chart", "props": {"days": 7}},
-      {"id": "kuota-menipis", "span": 1, "kind": "low_quota", "props": {"limit": 10}},
-      {"id": "saran", "span": 3, "kind": "recommendations", "props": {"limit": 5}}
-    ]},
-    {"id": "pelanggan", "title": "Pelanggan", "columns": 1, "blocks": [
-      {"id": "tabel-pelanggan", "span": 1, "kind": "customer_table", "props": {"title": "Semua pelanggan", "filter": "all",
-        "columns": ["name", "status", "address", "profile", "used", "remaining", "actions"], "row_limit": 200}},
-      {"id": "detail-pelanggan", "span": 1, "kind": "builtin", "props": {"name": "customer_detail"}}
-    ]},
-    {"id": "router", "title": "Router", "columns": 2, "blocks": [
-      {"id": "status-router", "span": 1, "kind": "router_status", "props": {}},
-      {"id": "topologi", "span": 1, "kind": "topology", "props": {}},
-      {"id": "log-router", "span": 2, "kind": "logs", "props": {"topics": [], "limit": 50}}
-    ]},
-    {"id": "aksi", "title": "Tombol aksi", "columns": 1, "blocks": [
-      {"id": "daftar-aksi", "span": 1, "kind": "builtin", "props": {"name": "actions"}}]},
-    {"id": "riwayat", "title": "Riwayat", "columns": 1, "blocks": [
-      {"id": "audit", "span": 1, "kind": "builtin", "props": {"name": "audit"}}]},
-    {"id": "agen", "title": "Agen AI", "columns": 1, "blocks": [
-      {"id": "agen-chat", "span": 1, "kind": "builtin", "props": {"name": "agent"}}]},
-    {"id": "memori", "title": "Memori agen", "columns": 1, "blocks": [
-      {"id": "memori-agen", "span": 1, "kind": "builtin", "props": {"name": "agent_memory"}}]},
-    {"id": "pengaturan-ai", "title": "Pengaturan AI", "columns": 1, "blocks": [
-      {"id": "ai-settings", "span": 1, "kind": "builtin", "props": {"name": "ai_settings"}}]}
-  ],
-  "custom_css": ""
+  "dark": {
+   "bg": "#0a0c0f",
+   "surface": "#11151a",
+   "surface_alt": "#161b22",
+   "text": "#d8dee6",
+   "muted": "#7d8894",
+   "border": "#222a33",
+   "accent": "#22d3ee",
+   "on_accent": "#001016",
+   "ok": "#34d399",
+   "warn": "#fbbf24",
+   "danger": "#f87171"
+  },
+  "font": "inter",
+  "font_mono": "mono",
+  "font_size": 14,
+  "radius": 8,
+  "density": 90,
+  "shadow": "none"
+ },
+ "nav": {
+  "position": "compact",
+  "items": [
+   {
+    "page": "ringkasan",
+    "label": "Ringkasan",
+    "icon": "◫"
+   },
+   {
+    "page": "pelanggan",
+    "label": "Pelanggan",
+    "icon": "◎"
+   },
+   {
+    "page": "router",
+    "label": "Router",
+    "icon": "◇"
+   },
+   {
+    "page": "aksi",
+    "label": "Tombol aksi",
+    "icon": "▶"
+   },
+   {
+    "page": "riwayat",
+    "label": "Riwayat",
+    "icon": "≡"
+   },
+   {
+    "page": "agen",
+    "label": "Agen AI",
+    "icon": "✧"
+   },
+   {
+    "page": "memori",
+    "label": "Memori agen",
+    "icon": "◌"
+   },
+   {
+    "page": "pengaturan-ai",
+    "label": "Pengaturan AI",
+    "icon": "⚙"
+   }
+  ]
+ },
+ "pages": [
+  {
+   "id": "ringkasan",
+   "title": "Ringkasan",
+   "columns": 3,
+   "blocks": [
+    {
+     "id": "metrik-utama",
+     "span": 3,
+     "kind": "metrics",
+     "props": {
+      "items": [
+       "customers_total",
+       "customers_online",
+       "traffic_today",
+       "low_quota",
+       "cpu",
+       "uptime"
+      ]
+     }
+    },
+    {
+     "id": "trafik",
+     "span": 2,
+     "kind": "traffic_chart",
+     "props": {
+      "days": 7
+     }
+    },
+    {
+     "id": "kuota-menipis",
+     "span": 1,
+     "kind": "low_quota",
+     "props": {
+      "limit": 8
+     }
+    },
+    {
+     "id": "tabel-ringkas",
+     "span": 3,
+     "kind": "customer_table",
+     "props": {
+      "title": "Pelanggan",
+      "filter": "all",
+      "columns": [
+       "name",
+       "status",
+       "profile",
+       "used",
+       "limit"
+      ],
+      "row_limit": 10
+     }
+    },
+    {
+     "id": "saran",
+     "span": 3,
+     "kind": "recommendations",
+     "props": {
+      "limit": 5
+     }
+    }
+   ]
+  },
+  {
+   "id": "pelanggan",
+   "title": "Pelanggan",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "tabel-pelanggan",
+     "span": 1,
+     "kind": "customer_table",
+     "props": {
+      "title": "Semua pelanggan",
+      "filter": "all",
+      "columns": [
+       "name",
+       "status",
+       "address",
+       "profile",
+       "used",
+       "remaining",
+       "actions"
+      ],
+      "row_limit": 200
+     }
+    },
+    {
+     "id": "detail-pelanggan",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "customer_detail"
+     }
+    }
+   ]
+  },
+  {
+   "id": "router",
+   "title": "Router",
+   "columns": 2,
+   "blocks": [
+    {
+     "id": "status-router",
+     "span": 1,
+     "kind": "router_status",
+     "props": {}
+    },
+    {
+     "id": "topologi",
+     "span": 1,
+     "kind": "topology",
+     "props": {}
+    },
+    {
+     "id": "log-router",
+     "span": 2,
+     "kind": "logs",
+     "props": {
+      "topics": [],
+      "limit": 50
+     }
+    }
+   ]
+  },
+  {
+   "id": "aksi",
+   "title": "Tombol aksi",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "daftar-aksi",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "actions"
+     }
+    }
+   ]
+  },
+  {
+   "id": "riwayat",
+   "title": "Riwayat",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "audit",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "audit"
+     }
+    }
+   ]
+  },
+  {
+   "id": "agen",
+   "title": "Agen AI",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "agen-chat",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "agent"
+     }
+    }
+   ]
+  },
+  {
+   "id": "memori",
+   "title": "Memori agen",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "memori-agen",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "agent_memory"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pengaturan-ai",
+   "title": "Pengaturan AI",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "ai-settings",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "ai_settings"
+     }
+    }
+   ]
+  }
+ ],
+ "custom_css": ""
 }
