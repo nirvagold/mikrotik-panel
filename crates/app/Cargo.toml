@@ -1,0 +1,24 @@
+[package]
+name = "mikrotik-panel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.105"
+axum = "0.8.9"
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+panel-core = { version = "0.1.0", path = "../core-locked" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tower-http = { version = "0.7.1", features = ["set-header", "limit"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+
+[dev-dependencies]
+toml = "1.2.3"
+tower = { version = "0.5.3", features = ["util"] }

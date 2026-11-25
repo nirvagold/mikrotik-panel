@@ -1,0 +1,21 @@
+[Unit]
+Description=Panel MikroTik
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/mikrotik-panel/current/mikrotik-panel serve --config /etc/mikrotik-panel/config.toml
+Restart=on-failure
+RestartSec=3
+DynamicUser=yes
+StateDirectory=mikrotik-panel
+ReadOnlyPaths=/etc/mikrotik-panel
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+MemoryMax=64M
+# Rollback otomatis (tahap 5): OnFailure=mikrotik-panel-rollback.service
+
+[Install]
+WantedBy=multi-user.target

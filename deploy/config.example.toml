@@ -1,0 +1,21 @@
+# /etc/mikrotik-panel/config.toml  (chmod 600, pemilik root)
+bind = "127.0.0.1"          # di belakang Caddy/nginx; ganti ke IP LAN bila diakses langsung
+port = 8765
+database = "/var/lib/mikrotik-panel/panel.sqlite3"
+
+# mikrotik-panel gen-key
+secret_key = "GANTI"
+# mikrotik-panel hash-password
+admin_password_hash = "GANTI"
+
+cookie_secure = true         # false hanya bila diakses lewat HTTP di LAN tepercaya
+session_hours = 8
+trusted_proxies = ["127.0.0.1"]
+
+[router]
+host = "10.10.10.2"
+port = 8728                  # aktifkan: /ip service set api address=<IP server panel>/32 disabled=no
+user = "panel"               # user khusus, grup terbatas (read,write,api,test)
+# mikrotik-panel encrypt --config /etc/mikrotik-panel/config.toml
+password_encrypted = "GANTI"
+poll_seconds = 60
