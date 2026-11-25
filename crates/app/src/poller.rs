@@ -43,7 +43,7 @@ pub fn spawn(state: Shared) {
                 Ok(()) => {}
                 Err(e) => {
                     if !failing {
-                        tracing::warn!("sinkronisasi router gagal: {e:#}");
+                        tracing::warn!("sinkronisasi router gagal: {e}");
                     }
                     failing = true;
                     state.hub.publish(
@@ -167,6 +167,7 @@ mod tests {
             })),
             quota: Default::default(),
             sync_lock: Default::default(),
+            runs: Default::default(),
             config,
         });
         let mut events = state.hub.subscribe();

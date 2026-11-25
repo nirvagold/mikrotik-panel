@@ -30,6 +30,7 @@ pub struct AppState {
     pub router: Arc<RouterOs>,
     pub quota: crate::quota::Quota,
     pub sync_lock: tokio::sync::Mutex<()>,
+    pub runs: crate::agent_host::Runs,
 }
 
 pub type Shared = Arc<AppState>;
@@ -42,6 +43,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/session", get(session_info))
         .route("/api/events", get(events))
         .merge(crate::api::routes())
+        .merge(crate::agent_api::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -241,14 +243,14 @@ async fn spa() -> Html<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::routeros::RouterTarget;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use tower::ServiceExt;
 
-    fn state() -> Shared {
+    pub fn state() -> Shared {
         let config: Config = toml::from_str(&format!(
             r#"
             secret_key = "{}"
@@ -279,11 +281,12 @@ mod tests {
             })),
             quota: Default::default(),
             sync_lock: Default::default(),
+            runs: Default::default(),
             config,
         })
     }
 
-    fn req(method: &str, uri: &str, body: &str, extra: &[(&str, &str)]) -> HttpRequest<Body> {
+    pub fn req(method: &str, uri: &str, body: &str, extra: &[(&str, &str)]) -> HttpRequest<Body> {
         let mut b = HttpRequest::builder()
             .method(method)
             .uri(uri)

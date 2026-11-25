@@ -1,3 +1,5 @@
+mod agent_api;
+mod agent_host;
 mod api;
 mod events;
 mod http;
@@ -156,6 +158,8 @@ fn main() -> anyhow::Result<()> {
 
 fn serve(args: Args) -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
+    // Dua penyedia kripto ikut ter-link (ring untuk API-SSL, aws-lc dari reqwest); tetapkan satu default.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut config = Config::load(&args.config)?;
     if let Some(port) = args.port {
         config.port = port;
@@ -195,6 +199,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
         router,
         quota: Default::default(),
         sync_lock: Default::default(),
+        runs: Default::default(),
         config,
     });
     poller::spawn(state.clone());

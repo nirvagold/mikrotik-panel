@@ -81,6 +81,16 @@ const MIGRATIONS: &[&str] = &[
     END;
     CREATE VIRTUAL TABLE routeros_reference USING fts5(path, title, body);
     "#,
+    // v2: kartu persetujuan usulan agen.
+    r#"
+    CREATE TABLE agent_proposals (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, tool_use_id TEXT, tool TEXT NOT NULL,
+        input TEXT NOT NULL, permission TEXT NOT NULL, preview TEXT, label TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'done', 'failed')),
+        result TEXT, created_at INTEGER NOT NULL, decided_at INTEGER
+    );
+    CREATE INDEX agent_proposals_conv ON agent_proposals(conversation_id, created_at);
+    "#,
 ];
 
 #[derive(Clone)]
@@ -96,6 +106,7 @@ impl Store {
         Self::init(Connection::open(path)?)
     }
 
+    #[cfg(test)]
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         Self::init(Connection::open_in_memory()?)
     }
