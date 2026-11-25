@@ -19,6 +19,18 @@ Rencana lengkap: https://claude.ai/artifact/2nXcHyXLDPFcwf8ZD75tFH
 - Klien RouterOS API (8728): koneksi persisten, sambung ulang otomatis, baris di-stream tanpa batas 8 MB,
   parameter dikirim sebagai kata terpisah sehingga tidak bisa disisipi perintah.
 
+## Status tahap 2 (telemetri, kuota, agen)
+
+- Poller tiap `poll_seconds`: pelanggan User Manager, sesi PPPoE aktif, resource, interface.
+  Sesi di-stream (tanpa batas 8 MB); trafik dihitung per sesi dari counter terakhir, jadi jeda
+  sinkronisasi dan tengah malam tidak menghilangkan trafik. Reset kuota tanggal 29–31 didukung.
+- Tambah kuota: `POST /api/customers/{akun}/quota/preview` lalu `/apply`; dicek ulang di router dan dicatat di audit.
+- API: `/api/dashboard`, `/api/customers[/{akun}[/logs]]`, `/api/router`, `/api/router/refresh`, `/api/audit`,
+  `/api/settings/ai`, serta endpoint desain dan agen (lihat `web/src/agent/CONTRACT.md`).
+- API-SSL: `mikrotik-panel router-fingerprint`, lalu isi `tls = true` dan `tls_fingerprint` di config.
+  Router harus punya sertifikat di `/ip service set api-ssl certificate=...`.
+- Pindah dari panel lama: `mikrotik-panel migrate --from panel.sqlite3 --old-config private.json`.
+
 ## Pasang
 
 ```sh
