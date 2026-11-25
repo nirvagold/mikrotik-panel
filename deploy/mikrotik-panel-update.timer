@@ -1,0 +1,11 @@
+[Unit]
+Description=Cek rilis baru Panel MikroTik tiap jam
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -39,19 +39,36 @@ Rencana lengkap: https://claude.ai/artifact/2nXcHyXLDPFcwf8ZD75tFH
 - Darurat: buka `/?design=default` bila desain buatan agen membuat panel tak terpakai.
 - RSS terukur ~5,7 MB (binary rilis x86_64, router tiruan 16 pelanggan).
 
-## Pasang
+## Pasang di VPS (Ubuntu/Debian)
 
 ```sh
-install -Dm755 mikrotik-panel /opt/mikrotik-panel/releases/0.1.0/mikrotik-panel
-ln -sfn /opt/mikrotik-panel/releases/0.1.0 /opt/mikrotik-panel/current
-install -Dm600 deploy/config.example.toml /etc/mikrotik-panel/config.toml
-/opt/mikrotik-panel/current/mikrotik-panel gen-key          # isi secret_key
-/opt/mikrotik-panel/current/mikrotik-panel hash-password    # isi admin_password_hash
-/opt/mikrotik-panel/current/mikrotik-panel encrypt --config /etc/mikrotik-panel/config.toml  # isi router.password_encrypted
-install -m644 deploy/mikrotik-panel.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now mikrotik-panel
-curl -s http://127.0.0.1:8765/api/health
+curl -fsSL https://raw.githubusercontent.com/nirvagold/mikrotik-panel/main/deploy/install.sh | sudo bash
 ```
+
+Pemasang mengunduh rilis terbaru dari GitHub (hash SHA256 dicek), menanyakan port, IP/user/kata sandi
+router, dan kata sandi admin, lalu memasang layanan `mikrotik-panel` dan pembaru otomatis.
+Port bawaan 8780 supaya bisa berjalan berdampingan dengan panel lama (8765–8767).
+Menjalankan ulang aman: config yang sudah ada tidak diubah.
+
+## Update otomatis
+
+`mikrotik-panel-update.timer` mengecek rilis GitHub tiap jam. Bila ada tag baru:
+unduh + cek hash → hentikan panel → cadangkan database → ganti symlink `/opt/mikrotik-panel/current`
+→ nyalakan → tunggu `/api/health` melaporkan versi baru (maks. 45 detik). Gagal = database dan rilis
+lama dikembalikan otomatis dan rilis itu tidak dicoba lagi oleh timer. Disimpan 3 rilis + 3 cadangan.
+Setelah update, admin perlu login ulang (sesi disimpan di memori).
+
+```sh
+sudo mikrotik-panel-update --status          # versi terpasang, hasil update terakhir, jadwal berikutnya
+sudo mikrotik-panel-update --check           # cek rilis terbaru tanpa memasang
+sudo mikrotik-panel-update                   # update sekarang
+sudo mikrotik-panel-update --rollback        # kembali ke rilis sebelumnya (beserta database)
+sudo mikrotik-panel-update --version v0.1.0  # pasang versi tertentu
+sudo systemctl disable --now mikrotik-panel-update.timer   # matikan update otomatis
+```
+
+Membuat rilis: `git tag v0.1.1 && git push origin v0.1.1`. GitHub Actions membangun binary dengan
+versi dari tag dan mengunggah binary, `SHA256SUMS`, skrip, dan unit systemd ke halaman rilis.
 
 ## Build
 

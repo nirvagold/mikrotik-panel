@@ -39,13 +39,24 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build static binaries
+        env:
+          PANEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
+          # PANEL_VERSION = tag tanpa awalan v; kosong di luar rilis (pakai versi Cargo)
+          export PANEL_VERSION="${PANEL_VERSION#v}"
+          [ -n "$PANEL_VERSION" ] || unset PANEL_VERSION
           mkdir -p dist
           for t in x86_64 aarch64; do
             cargo zigbuild --release --locked -p mikrotik-panel --target $t-unknown-linux-musl
             cp target/$t-unknown-linux-musl/release/mikrotik-panel dist/mikrotik-panel-$t
           done
-          cd dist && sha256sum mikrotik-panel-* > SHA256SUMS && cat SHA256SUMS
+          cp deploy/update.sh dist/mikrotik-panel-update
+          cp deploy/install.sh deploy/mikrotik-panel.service deploy/mikrotik-panel-update.service \
+             deploy/mikrotik-panel-update.timer deploy/config.example.toml dist/
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          if [ -n "${PANEL_VERSION:-}" ]; then
+            test "$(./mikrotik-panel-x86_64 version)" = "$PANEL_VERSION"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

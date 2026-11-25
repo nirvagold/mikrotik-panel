@@ -1,0 +1,8 @@
+[Unit]
+Description=Pasang rilis baru Panel MikroTik bila ada
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mikrotik-panel-update --auto

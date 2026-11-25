@@ -25,12 +25,19 @@ use panel_core::crypto::{self, Cipher};
 
 const USAGE: &str = "Pemakaian:
   mikrotik-panel serve [--config PATH] [--port PORT]   jalankan panel
+  mikrotik-panel version                               tampilkan versi
   mikrotik-panel gen-key                               buat secret_key baru
   mikrotik-panel hash-password                         hash kata sandi admin (dibaca dari stdin)
   mikrotik-panel encrypt [--config PATH]               enkripsi kata sandi router (dibaca dari stdin)
   mikrotik-panel router-fingerprint [--config PATH]    tampilkan sidik jari sertifikat API-SSL router
   mikrotik-panel migrate --from PANEL.sqlite3 [--old-config private.json] [--config PATH]
                                                        pindahkan data panel lama (sekali saja)";
+
+/// Versi rilis: diisi PANEL_VERSION oleh GitHub Actions dari tag (tanpa awalan v).
+pub const VERSION: &str = match option_env!("PANEL_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 const DEFAULT_CONFIG: &str = "/etc/mikrotik-panel/config.toml";
 
@@ -89,6 +96,10 @@ fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
     match args.command.as_str() {
         "serve" => serve(args),
+        "version" | "--version" | "-V" => {
+            println!("{VERSION}");
+            Ok(())
+        }
         "gen-key" => {
             println!("{}", Cipher::generate_key());
             Ok(())

@@ -226,7 +226,7 @@ async fn health(State(state): State<Shared>) -> Response {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    let body = json!({ "ok": db_ok, "version": env!("CARGO_PKG_VERSION"), "database": { "ok": db_ok }, "router": router });
+    let body = json!({ "ok": db_ok, "version": crate::VERSION, "database": { "ok": db_ok }, "router": router });
     (status, Json(body)).into_response()
 }
 

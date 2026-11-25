@@ -15,7 +15,6 @@ ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 MemoryMax=64M
-# Rollback otomatis (tahap 5): OnFailure=mikrotik-panel-rollback.service
 
 [Install]
 WantedBy=multi-user.target
