@@ -1,285 +1,285 @@
 {
-  "tokens": {
-    "mode": "dark",
-    "light": {
-      "bg": "#f5f6f8",
-      "surface": "#ffffff",
-      "surface_alt": "#eef0f4",
-      "text": "#1b1f27",
-      "muted": "#5b6474",
-      "border": "#d9dde5",
-      "accent": "#4f46e5",
-      "on_accent": "#ffffff",
-      "ok": "#16794c",
-      "warn": "#9a6700",
-      "danger": "#c0262d"
-    },
-    "dark": {
-      "bg": "#000000",
-      "surface": "#0a0a0a",
-      "surface_alt": "#111111",
-      "text": "#ededed",
-      "muted": "#a1a1a1",
-      "border": "#262626",
-      "accent": "#ededed",
-      "on_accent": "#0a0a0a",
-      "ok": "#3ecf8e",
-      "warn": "#f5a524",
-      "danger": "#ff6166"
-    },
-    "font": "geist",
-    "font_mono": "geist_mono",
-    "font_size": 14,
-    "radius": 8,
-    "density": 100,
-    "shadow": "none"
+ "tokens": {
+  "mode": "dark",
+  "light": {
+   "bg": "#f5f6f8",
+   "surface": "#ffffff",
+   "surface_alt": "#eef0f4",
+   "text": "#1b1f27",
+   "muted": "#5b6474",
+   "border": "#d9dde5",
+   "accent": "#4f46e5",
+   "on_accent": "#ffffff",
+   "ok": "#16794c",
+   "warn": "#9a6700",
+   "danger": "#c0262d"
   },
-  "nav": {
-    "position": "top",
-    "items": [
-      {
-        "page": "ringkasan",
-        "label": "Ringkasan",
-        "icon": "◫"
-      },
-      {
-        "page": "pelanggan",
-        "label": "Pelanggan",
-        "icon": "◎"
-      },
-      {
-        "page": "router",
-        "label": "Router",
-        "icon": "◇"
-      },
-      {
-        "page": "aksi",
-        "label": "Tombol aksi",
-        "icon": "▶"
-      },
-      {
-        "page": "riwayat",
-        "label": "Riwayat",
-        "icon": "≡"
-      },
-      {
-        "page": "agen",
-        "label": "Agen AI",
-        "icon": "✧"
-      },
-      {
-        "page": "memori",
-        "label": "Memori agen",
-        "icon": "◌"
-      },
-      {
-        "page": "pengaturan-ai",
-        "label": "Pengaturan AI",
-        "icon": "⚙"
-      }
-    ]
+  "dark": {
+   "bg": "#18181b",
+   "surface": "#1f1f23",
+   "surface_alt": "#27272a",
+   "text": "#f4f4f5",
+   "muted": "#a1a1aa",
+   "border": "#34343a",
+   "accent": "#f4f4f5",
+   "on_accent": "#18181b",
+   "ok": "#3ecf8e",
+   "warn": "#f5a524",
+   "danger": "#ff6166"
   },
-  "pages": [
+  "font": "geist",
+  "font_mono": "geist_mono",
+  "font_size": 14,
+  "radius": 8,
+  "density": 100,
+  "shadow": "none"
+ },
+ "nav": {
+  "position": "top",
+  "items": [
+   {
+    "page": "ringkasan",
+    "label": "Ringkasan",
+    "icon": "◫"
+   },
+   {
+    "page": "pelanggan",
+    "label": "Pelanggan",
+    "icon": "◎"
+   },
+   {
+    "page": "router",
+    "label": "Router",
+    "icon": "◇"
+   },
+   {
+    "page": "aksi",
+    "label": "Tombol aksi",
+    "icon": "▶"
+   },
+   {
+    "page": "riwayat",
+    "label": "Riwayat",
+    "icon": "≡"
+   },
+   {
+    "page": "agen",
+    "label": "Agen AI",
+    "icon": "✧"
+   },
+   {
+    "page": "memori",
+    "label": "Memori agen",
+    "icon": "◌"
+   },
+   {
+    "page": "pengaturan-ai",
+    "label": "Pengaturan AI",
+    "icon": "⚙"
+   }
+  ]
+ },
+ "pages": [
+  {
+   "id": "ringkasan",
+   "title": "Ringkasan",
+   "columns": 3,
+   "blocks": [
     {
-      "id": "ringkasan",
-      "title": "Ringkasan",
-      "columns": 3,
-      "blocks": [
-        {
-          "id": "metrik-utama",
-          "span": 3,
-          "kind": "metrics",
-          "props": {
-            "items": [
-              "customers_total",
-              "customers_online",
-              "traffic_today",
-              "low_quota",
-              "cpu",
-              "uptime"
-            ]
-          }
-        },
-        {
-          "id": "trafik",
-          "span": 2,
-          "kind": "traffic_chart",
-          "props": {
-            "days": 7
-          }
-        },
-        {
-          "id": "kuota-menipis",
-          "span": 1,
-          "kind": "low_quota",
-          "props": {
-            "limit": 8
-          }
-        },
-        {
-          "id": "tabel-ringkas",
-          "span": 3,
-          "kind": "customer_table",
-          "props": {
-            "title": "Pelanggan",
-            "filter": "all",
-            "columns": [
-              "name",
-              "status",
-              "profile",
-              "used",
-              "limit"
-            ],
-            "row_limit": 10
-          }
-        },
-        {
-          "id": "saran",
-          "span": 3,
-          "kind": "recommendations",
-          "props": {
-            "limit": 5
-          }
-        }
+     "id": "metrik-utama",
+     "span": 3,
+     "kind": "metrics",
+     "props": {
+      "items": [
+       "customers_total",
+       "customers_online",
+       "traffic_today",
+       "low_quota",
+       "cpu",
+       "uptime"
       ]
+     }
     },
     {
-      "id": "pelanggan",
+     "id": "trafik",
+     "span": 2,
+     "kind": "traffic_chart",
+     "props": {
+      "days": 7
+     }
+    },
+    {
+     "id": "kuota-menipis",
+     "span": 1,
+     "kind": "low_quota",
+     "props": {
+      "limit": 8
+     }
+    },
+    {
+     "id": "tabel-ringkas",
+     "span": 3,
+     "kind": "customer_table",
+     "props": {
       "title": "Pelanggan",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "tabel-pelanggan",
-          "span": 1,
-          "kind": "customer_table",
-          "props": {
-            "title": "Semua pelanggan",
-            "filter": "all",
-            "columns": [
-              "name",
-              "status",
-              "address",
-              "profile",
-              "used",
-              "remaining",
-              "actions"
-            ],
-            "row_limit": 200
-          }
-        },
-        {
-          "id": "detail-pelanggan",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "customer_detail"
-          }
-        }
-      ]
+      "filter": "all",
+      "columns": [
+       "name",
+       "status",
+       "profile",
+       "used",
+       "limit"
+      ],
+      "row_limit": 10
+     }
     },
     {
-      "id": "router",
-      "title": "Router",
-      "columns": 2,
-      "blocks": [
-        {
-          "id": "status-router",
-          "span": 1,
-          "kind": "router_status",
-          "props": {}
-        },
-        {
-          "id": "topologi",
-          "span": 1,
-          "kind": "topology",
-          "props": {}
-        },
-        {
-          "id": "log-router",
-          "span": 2,
-          "kind": "logs",
-          "props": {
-            "topics": [],
-            "limit": 50
-          }
-        }
-      ]
-    },
-    {
-      "id": "aksi",
-      "title": "Tombol aksi",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "daftar-aksi",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "actions"
-          }
-        }
-      ]
-    },
-    {
-      "id": "riwayat",
-      "title": "Riwayat",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "audit",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "audit"
-          }
-        }
-      ]
-    },
-    {
-      "id": "agen",
-      "title": "Agen AI",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "agen-chat",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "agent"
-          }
-        }
-      ]
-    },
-    {
-      "id": "memori",
-      "title": "Memori agen",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "memori-agen",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "agent_memory"
-          }
-        }
-      ]
-    },
-    {
-      "id": "pengaturan-ai",
-      "title": "Pengaturan AI",
-      "columns": 1,
-      "blocks": [
-        {
-          "id": "ai-settings",
-          "span": 1,
-          "kind": "builtin",
-          "props": {
-            "name": "ai_settings"
-          }
-        }
-      ]
+     "id": "saran",
+     "span": 3,
+     "kind": "recommendations",
+     "props": {
+      "limit": 5
+     }
     }
-  ],
-  "custom_css": ""
+   ]
+  },
+  {
+   "id": "pelanggan",
+   "title": "Pelanggan",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "tabel-pelanggan",
+     "span": 1,
+     "kind": "customer_table",
+     "props": {
+      "title": "Semua pelanggan",
+      "filter": "all",
+      "columns": [
+       "name",
+       "status",
+       "address",
+       "profile",
+       "used",
+       "remaining",
+       "actions"
+      ],
+      "row_limit": 200
+     }
+    },
+    {
+     "id": "detail-pelanggan",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "customer_detail"
+     }
+    }
+   ]
+  },
+  {
+   "id": "router",
+   "title": "Router",
+   "columns": 2,
+   "blocks": [
+    {
+     "id": "status-router",
+     "span": 1,
+     "kind": "router_status",
+     "props": {}
+    },
+    {
+     "id": "topologi",
+     "span": 1,
+     "kind": "topology",
+     "props": {}
+    },
+    {
+     "id": "log-router",
+     "span": 2,
+     "kind": "logs",
+     "props": {
+      "topics": [],
+      "limit": 50
+     }
+    }
+   ]
+  },
+  {
+   "id": "aksi",
+   "title": "Tombol aksi",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "daftar-aksi",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "actions"
+     }
+    }
+   ]
+  },
+  {
+   "id": "riwayat",
+   "title": "Riwayat",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "audit",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "audit"
+     }
+    }
+   ]
+  },
+  {
+   "id": "agen",
+   "title": "Agen AI",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "agen-chat",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "agent"
+     }
+    }
+   ]
+  },
+  {
+   "id": "memori",
+   "title": "Memori agen",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "memori-agen",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "agent_memory"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pengaturan-ai",
+   "title": "Pengaturan AI",
+   "columns": 1,
+   "blocks": [
+    {
+     "id": "ai-settings",
+     "span": 1,
+     "kind": "builtin",
+     "props": {
+      "name": "ai_settings"
+     }
+    }
+   ]
+  }
+ ],
+ "custom_css": ""
 }

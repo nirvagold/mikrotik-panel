@@ -6,7 +6,10 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 /// Desain bawaan rilis sebelumnya (dibandingkan setelah dinormalkan).
-const LEGACY_DEFAULTS: &[&str] = &[include_str!("legacy_designs/noc_v0_1.json")];
+const LEGACY_DEFAULTS: &[&str] = &[
+    include_str!("legacy_designs/noc_v0_1.json"),
+    include_str!("legacy_designs/vercel_v0_1_4.json"),
+];
 
 fn canonical(spec: &str) -> Option<Value> {
     let spec: DesignSpec = serde_json::from_str(spec).ok()?;
