@@ -27,6 +27,13 @@ class H(BaseHTTPRequestHandler):
             parts=tool_calls([('propose_command',{'command':{'path':['ip','service'],'verb':'set','find':{'name':'api'},'args':{'address':'10.10.10.0/24'}},'reason':'Batasi API ke LAN.'})])
         elif 'batasi' in ut:
             parts=tool_calls([('propose_command',{'command':{'path':['ip','service'],'verb':'set','find':{'name':'api'},'args':{'address':'10.10.10.0/24,127.0.0.1/32'}},'reason':'Batasi API ke LAN dan server panel.'})])
+        elif 'kartu' in ut:
+            parts=[chunk({'delta':{'content':'Ini datanya. '}})]+tool_calls([
+              ('show_card',{'kind':'table','title':'Pelanggan teratas','data':{'columns':['Nama','Pakai','Status'],'rows':[['budi','12,4 GiB','online'],['sari','8,1 GiB','offline'],['andi','3,0 GiB','online']]}}),
+              ('show_card',{'kind':'chart','title':'Pemakaian per pelanggan','data':{'type':'bar','unit':'GiB','labels':['budi','sari','andi'],'series':[{'name':'Unduh','values':[12.4,8.1,3.0]},{'name':'Unggah','values':[2.1,1.4,0.6]}]}}),
+              ('show_card',{'kind':'chart','title':'Trafik 24 jam','data':{'type':'line','unit':'Mbps','labels':['00:00','06:00','12:00','18:00','23:00'],'series':[{'name':'Unduh','values':[20,8,45,80,35]}]}}),
+              ('show_card',{'kind':'topology','title':'Topologi','data':{'router':'MikroTik-Core','interfaces':[{'name':'ether1','type':'ether','running':True},{'name':'bridge-lan','type':'bridge','running':True,'arp_hosts':14},{'name':'ether2','type':'ether','running':True},{'name':'ether3','type':'ether','running':False},{'name':'vlan10','type':'vlan','running':True}],'bridges':{'bridge-lan':[{'interface':'ether2'},{'interface':'ether3'}]},'vlans':[{'name':'vlan10','interface':'bridge-lan'}],'neighbors':[{'interface':'ether1','identity':'ISP-GW','address':'100.64.0.1','mac-address':'AA'}]}}),
+            ])
         elif 'putus' in ut:
             parts=[chunk({'delta':{'content':'Saya siapkan perintahnya, perlu persetujuan Anda. '}})]+tool_calls([('propose_command',{'command':{'path':['ppp','active'],'verb':'remove','find':{'name':'budi'}},'reason':'Pelanggan minta sesi diputus.'})])
         elif 'lambat' in ut:

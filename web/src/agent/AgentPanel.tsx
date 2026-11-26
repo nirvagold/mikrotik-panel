@@ -6,6 +6,7 @@ import { on } from '../events';
 import { keyIntent, parseSlash, SLASH_HELP } from './composer';
 import * as design from './design-store';
 import { Markdown } from './markdown';
+import { ShowCard } from './ShowCard';
 import type { ChatMessage, Conversation, Part, ProposalCard } from './types';
 
 const TOOL_LABELS: Record<string, string> = {
@@ -67,6 +68,7 @@ export function AgentPanel() {
   const [typed, setTyped] = useState<Record<string, string>>({});
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const convRef = useRef(conversation);
   convRef.current = conversation;
   const running = runId !== null;
@@ -146,6 +148,35 @@ export function AgentPanel() {
     const el = log.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
   }, [messages, streaming, tools, proposals, question]);
+
+  // HP: keyboard layar tidak boleh mendorong chat ke atas. Popup layar penuh mengikuti
+  // visualViewport (area yang benar-benar terlihat di atas keyboard), dan halaman di
+  // belakangnya dikunci supaya browser tidak menggulirnya saat kolom teks difokus.
+  useLayoutEffect(() => {
+    const el = panel.current;
+    const vv = window.visualViewport;
+    if (!open || !el || !vv) return;
+    const small = window.matchMedia('(max-width: 640px)');
+    const root = document.documentElement;
+    const prevOverflow = root.style.overflow;
+    const sync = () => {
+      if (!small.matches) { el.style.removeProperty('--vvh'); el.style.removeProperty('--vvt'); root.style.overflow = prevOverflow; return; }
+      const logEl = log.current;
+      const atBottom = !logEl || logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
+      el.style.setProperty('--vvh', `${vv.height}px`);
+      el.style.setProperty('--vvt', `${vv.offsetTop}px`);
+      root.style.overflow = 'hidden';
+      if (atBottom && logEl) logEl.scrollTop = logEl.scrollHeight;
+    };
+    sync();
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+    small.addEventListener('change', sync);
+    return () => {
+      vv.removeEventListener('resize', sync); vv.removeEventListener('scroll', sync); small.removeEventListener('change', sync);
+      root.style.overflow = prevOverflow;
+    };
+  }, [open, docked]);
 
   // Textarea tumbuh otomatis (CSSOM, aman untuk CSP).
   useLayoutEffect(() => {
@@ -270,7 +301,7 @@ export function AgentPanel() {
   }
 
   return (
-    <section class={`panel ${docked ? 'docked' : 'floating'}`} aria-label="Agen AI">
+    <section ref={panel} class={`panel ${docked ? 'docked' : 'floating'}`} aria-label="Agen AI">
       <header class="head">
         <span class="mark" aria-hidden="true">✦</span>
         <select class="conv" value={conversation ?? ''} aria-label="Percakapan"
@@ -322,6 +353,7 @@ export function AgentPanel() {
           return <article key={m.id} class="msg assistant">
             {used.length > 0 && <ul class="chips">{used.map(t => <li key={t.id} class="chip done">{TOOL_LABELS[t.name] ?? t.name}</li>)}</ul>}
             {text && <Markdown text={text} />}
+            {used.filter(t => t.name === 'show_card').map(t => <ShowCard key={`card-${t.id}`} input={t.input} />)}
             {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
             {lastOfTurn && !running && <div class="actions">
               {text && <button type="button" onClick={() => void navigator.clipboard?.writeText(text)}>Salin</button>}

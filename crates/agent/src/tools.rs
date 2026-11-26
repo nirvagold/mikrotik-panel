@@ -120,7 +120,7 @@ pub fn catalog() -> Vec<ToolDef> {
         t("forget", Memory, Free, "Hapus memori.", obj(json!({"id": s("ID memori")}), &["id"])),
         // G. Percakapan
         t("ask_user", Conversation, Free, "Tanyakan pilihan ganda ke admin di chat; giliran berhenti sampai admin menjawab.", obj(json!({"question": s("pertanyaan"), "options": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"type": "string"}}}), &["question", "options"])),
-        t("show_card", Conversation, Free, "Tampilkan tabel, grafik, atau diagram topologi di chat.", obj(json!({"kind": {"enum": ["table", "chart", "topology"]}, "title": s("judul"), "data": {"type": "object"}}), &["kind", "data"])),
+        t("show_card", Conversation, Free, "Tampilkan tabel, grafik, atau diagram topologi di chat. Bentuk data: table {columns?: [..], rows: [[..]] atau [{kolom: nilai}]}; chart {type: bar|line, unit?, labels: [..], series: [{name, values: [angka]}]}; topology {nodes: [{id, label, type?, status?: up|down|disabled}], edges: [{from, to, label?}]} atau hasil get_topology apa adanya.", obj(json!({"kind": {"enum": ["table", "chart", "topology"]}, "title": s("judul"), "data": {"type": "object"}}), &["kind", "data"])),
         t("set_conversation_title", Conversation, Free, "Beri judul percakapan.", obj(json!({"title": s("judul, maks 60 karakter")}), &["title"])),
         // H. Update panel (lewat pembaru di server; agen tidak punya akses edit kode/GitHub)
         t("check_update", Code, Free, "Cek rilis panel terbaru di GitHub lewat pembaru server. Hasil: versi terpasang, versi terbaru, ada update atau tidak.", obj(json!({}), &[])),
