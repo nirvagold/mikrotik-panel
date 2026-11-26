@@ -85,6 +85,12 @@ export function AgentPanel() {
   }
 
   useEffect(() => { void loadConversations(); void loadMessages(conversation); }, []);
+  // Tombol agen di menu bawah HP membuka/menutup popup.
+  useEffect(() => {
+    const toggle = () => { setOpen(o => !o); requestAnimationFrame(() => input.current?.focus()); };
+    window.addEventListener('agent:toggle', toggle);
+    return () => window.removeEventListener('agent:toggle', toggle);
+  }, []);
   useEffect(() => { storage('agent-conversation', conversation ?? ''); }, [conversation]);
   useEffect(() => {
     storage('agent-mode', docked ? 'docked' : 'popup');

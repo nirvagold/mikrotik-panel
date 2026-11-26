@@ -1,0 +1,25 @@
+const { chromium, devices } = require('playwright');
+(async () => {
+  const b = await chromium.launch(); const res = {};
+  const ctx = await b.newContext({ ...devices['Pixel 7'] });
+  await ctx.addInitScript(() => { const o = Element.prototype.attachShadow; Element.prototype.attachShadow = function (i) { return o.call(this, { ...i, mode: 'open' }); }; });
+  const p = await ctx.newPage();
+  await p.goto('http://127.0.0.1:8799/'); await p.fill('input[type=password]', 'rahasia-admin-123'); await p.click('button[type=submit]');
+  await p.waitForSelector('.panel-root'); await p.waitForTimeout(1500);
+  res.launcherVisible = await p.locator('.launcher').isVisible().catch(() => false);
+  res.tabs = await p.locator('.tabbar .tab').evaluateAll(els => els.map(e => e.textContent.trim() || e.getAttribute('aria-label')));
+  await p.screenshot({ path: 'shots/hp-menu-bawah.png' });
+  await p.locator('.tabbar a.tab').nth(1).click(); await p.waitForTimeout(800);
+  res.afterTap = p.url();
+  await p.locator('.tabbar button:has-text("Lainnya")').click(); await p.waitForTimeout(400);
+  res.sheet = await p.locator('.sheet li').allInnerTexts();
+  await p.screenshot({ path: 'shots/hp-lainnya.png' });
+  await p.locator('.sheet-backdrop').click({ position: { x: 20, y: 20 } }); await p.waitForTimeout(300);
+  await p.locator('.tab-agent').click(); await p.waitForTimeout(500);
+  res.agentOpen = await p.locator('textarea[aria-label="Pesan untuk agen"]').count();
+  await p.screenshot({ path: 'shots/hp-agen.png' });
+  const d = await (await b.newContext({ viewport: { width: 1400, height: 860 } })).newPage();
+  await d.goto('http://127.0.0.1:8799/'); await d.fill('input[type=password]', 'rahasia-admin-123'); await d.click('button[type=submit]'); await d.waitForTimeout(1200);
+  res.desktopTabbarHidden = !(await d.locator('.tabbar').isVisible());
+  console.log(JSON.stringify(res, null, 1)); await b.close();
+})();

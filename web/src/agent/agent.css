@@ -75,7 +75,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .slash button { width: 100%; text-align: left; border: 0; background: transparent; color: var(--muted, #a1a1a1); padding: 6px 8px; border-radius: 6px; }
 .slash button:hover { background: var(--surface-alt, #111111); }
 .slash b { color: var(--text, #ededed); }
-@media (max-width: 640px) { .launcher { right: 16px; bottom: 16px; width: 52px; height: 52px; padding: 0; justify-content: center; } .launcher-text { display: none; } .panel.docked, .panel.floating { inset: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; } }
+@media (max-width: 760px) { .launcher { display: none; } }
+@media (max-width: 640px) { .panel.docked, .panel.floating { inset: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; } }
 @media (prefers-reduced-motion: reduce) { .pulse, .caret, .panel.floating { animation: none; } .log { scroll-behavior: auto; } }
 
 .card-head b { font-weight: 600; }

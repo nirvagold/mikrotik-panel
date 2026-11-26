@@ -22,6 +22,46 @@ const renderers: BlockRenderers = {
 /** ?design=default: mode darurat, tampilkan desain bawaan tanpa mengubah apa pun di server. */
 const emergency = new URLSearchParams(location.search).get('design') === 'default';
 
+/** Menu bawah ala Instagram untuk HP (permintaan Usep 2026-11-26): 3 halaman utama, tombol
+ *  agen di tengah, dan "Lainnya" berisi sisa menu serta Keluar. Di layar lebar disembunyikan CSS. */
+function TabBar({ items, current }: { items: DesignSpec['nav']['items']; current?: string }) {
+  const [more, setMore] = useState(false);
+  const pages = items.filter(i => i.page !== 'agen');
+  const main = pages.slice(0, 3);
+  const rest = pages.slice(3);
+  const restActive = rest.some(i => i.page === current);
+  const link = (item: DesignSpec['nav']['items'][number]) => (
+    <a key={item.page} href={`/${item.page}`} class="tab" aria-current={current === item.page ? 'page' : undefined}>
+      <span class="tab-icon" aria-hidden="true">{item.icon}</span><span class="tab-label">{item.label}</span>
+    </a>
+  );
+  return (
+    <>
+      <nav class="tabbar" aria-label="Menu bawah">
+        {main.slice(0, 2).map(link)}
+        <button type="button" class="tab tab-agent" aria-label="Buka agen AI" onClick={() => window.dispatchEvent(new Event('agent:toggle'))}>
+          <span class="tab-agent-mark" aria-hidden="true">✦</span>
+        </button>
+        {main.slice(2).map(link)}
+        <button type="button" class="tab" aria-expanded={more} aria-current={restActive ? 'page' : undefined} onClick={() => setMore(m => !m)}>
+          <span class="tab-icon" aria-hidden="true">☰</span><span class="tab-label">Lainnya</span>
+        </button>
+      </nav>
+      {more && (
+        <div class="sheet-backdrop" onClick={() => setMore(false)}>
+          <div class="sheet" role="dialog" aria-label="Menu lainnya" onClick={e => e.stopPropagation()}>
+            <span class="sheet-grip" aria-hidden="true" />
+            <ul>
+              {rest.map(item => <li key={item.page}><a href={`/${item.page}`} onClick={() => setMore(false)} aria-current={current === item.page ? 'page' : undefined}><span class="tab-icon" aria-hidden="true">{item.icon}</span>{item.label}</a></li>)}
+              <li><button type="button" onClick={() => void logout()}><span class="tab-icon" aria-hidden="true">⏻</span>Keluar</button></li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +180,7 @@ function Shell() {
             {page ? <DesignPage page={page} renderers={renderers} /> : <p class="muted design-page">Memuat tampilan…</p>}
           </main>
         </div>
+        <TabBar items={spec?.nav.items ?? []} current={page?.id} />
       </div>
     </div>
   );

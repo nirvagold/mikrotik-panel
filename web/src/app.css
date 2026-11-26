@@ -197,3 +197,33 @@ td[data-col="limit"], td[data-col="remaining"], td[data-col="profile"] { color: 
 .login-card label { color: #a1a1a1; }
 .login-card input { color: #ededed; }
 .login-card button { width: 100%; }
+
+/* Menu bawah ala Instagram untuk HP (Usep 2026-11-26). Di layar lebar tidak tampil. */
+.tabbar, .sheet-backdrop { display: none; }
+@media (max-width: 760px) {
+  .nav ul, .panel-root[data-nav="compact"] .nav ul, .panel-root[data-nav="top"] .nav ul,
+  .nav-foot, .panel-root[data-nav="compact"] .nav-foot, .panel-root[data-nav="top"] .nav-foot { display: none; }
+  .nav, .panel-root[data-nav="compact"] .nav, .panel-root[data-nav="top"] .nav { height: 52px; }
+  .panel-root .brand-text { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+  .content { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .tabbar { display: grid; grid-template-columns: repeat(5, 1fr); align-items: center; position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    height: calc(60px + env(safe-area-inset-bottom)); padding: 0 6px env(safe-area-inset-bottom);
+    background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(180%) blur(12px); border-top: 1px solid var(--border); }
+  .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 100%; min-height: 0; padding: 0; border: 0; background: none; color: var(--muted); text-decoration: none; font: 500 10.5px var(--font); }
+  .tab-icon { font-size: 19px; line-height: 1; }
+  .tab[aria-current="page"] { color: var(--text); }
+  .tab[aria-current="page"] .tab-icon { transform: scale(1.08); }
+  .tab-agent { justify-self: center; }
+  .tab-agent-mark { display: grid; place-items: center; width: 46px; height: 34px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 18px; }
+  .tab-agent:active .tab-agent-mark { transform: scale(.94); }
+  .sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / .55); animation: fade .15s ease-out; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px calc(16px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border); border-radius: 16px 16px 0 0; animation: rise .18s ease-out; }
+  .sheet-grip { display: block; width: 36px; height: 4px; margin: 2px auto 10px; border-radius: 4px; background: var(--border); }
+  .sheet ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .sheet a, .sheet button { display: flex; align-items: center; gap: 14px; width: 100%; height: 48px; padding: 0 10px; border: 0; border-radius: 10px; background: none; color: var(--text); font: 500 15px var(--font); text-decoration: none; text-align: left; }
+  .sheet a[aria-current="page"], .sheet a:active, .sheet button:active { background: var(--surface-alt); }
+  .sheet .tab-icon { width: 22px; text-align: center; color: var(--muted); }
+}
+@keyframes fade { from { opacity: 0; } }
+@keyframes rise { from { transform: translateY(24px); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .sheet, .sheet-backdrop { animation: none; } }
