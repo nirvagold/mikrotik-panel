@@ -1,7 +1,7 @@
 // Isi tiap jenis blok di design spec. Layout (grid, lebar) diurus DesignPage dari modul agen.
 import { useEffect, useState } from 'preact/hooks';
 import type { Block } from './agent';
-import { get } from './api';
+import { get, post } from './api';
 import { dashboard, historyDays, loadError, lowQuota, refreshDashboard, routerStatus, type Customer } from './data';
 import { ago, bytes, gib, shortDate } from './format';
 import { on } from './events';
@@ -233,30 +233,176 @@ export function Logs({ block }: Props<'logs'>) {
 }
 
 type Recommendation = { id: string; kind: string; finding: string; evidence: string | null; status: string };
+type RecEvidence = { title?: string; evidence?: unknown; impact?: string; fix?: { command?: unknown } | null };
+
+const KIND_LABEL: Record<string, string> = { performance: 'performa', security: 'keamanan', topology: 'topologi', layout: 'tampilan' };
 
 export function Recommendations({ block }: Props<'recommendations'>) {
   const [rows, setRows] = useState<Recommendation[] | null>(null);
-  useEffect(() => { get<{ recommendations: Recommendation[] }>('/api/recommendations').then(r => setRows(r.recommendations)).catch(() => setRows([])); }, []);
+  const [msg, setMsg] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState('');
+  const load = () => get<{ recommendations: Recommendation[] }>('/api/recommendations').then(r => setRows(r.recommendations)).catch(() => setRows([]));
+  useEffect(() => { void load(); return on('recommendations.updated', () => void load()); }, []);
   const open = (rows ?? []).filter(r => r.status === 'open').slice(0, block.props.limit);
+  const [need, setNeed] = useState<Record<string, { phrase: string; typed: string }>>({});
+  const act = async (r: Recommendation, kind: 'accept' | 'dismiss', typed?: string) => {
+    setBusy(r.id);
+    try {
+      const res = await post<{ message?: string }>(`/api/recommendations/${r.id}/${kind}`, typed ? { typed } : {});
+      if (res.message) setMsg(m => ({ ...m, [r.id]: res.message! }));
+      await load();
+    } catch (e) {
+      const text = (e as Error).message;
+      const m = /Ketik "([^"]+)"/.exec(text);
+      if (m && kind === 'accept') setNeed(n => ({ ...n, [r.id]: { phrase: m[1], typed: '' } }));
+      else setMsg(x => ({ ...x, [r.id]: text }));
+    } finally { setBusy(''); }
+  };
+  const done = Object.entries(msg).filter(([id]) => !open.some(r => r.id === id));
   return (
     <div>
       <h2 class="block-title">Saran agen</h2>
       {open.length === 0 ? <p class="muted">Belum ada saran. Minta agen “audit router” untuk membuat saran.</p> : (
-        <ul class="plain-list">{open.map(r => <li key={r.id}><span class="badge idle">{r.kind}</span> {r.finding}</li>)}</ul>
+        <ul class="rec-list">{open.map(r => {
+          const ev: RecEvidence = (() => { try { return JSON.parse(r.evidence ?? '{}'); } catch { return {}; } })();
+          const [title, ...rest] = r.finding.split(' — ');
+          return (
+            <li key={r.id}>
+              <div class="rec-head"><span class="badge idle">{KIND_LABEL[r.kind] ?? r.kind}</span><b>{title}</b></div>
+              {rest.length > 0 && <p>{rest.join(' — ')}</p>}
+              {ev.impact && <p class="muted small">Dampak: {ev.impact}</p>}
+              {msg[r.id] && <p class="alert small">{msg[r.id]}</p>}
+              {need[r.id] && <label class="small">Perintah kritis. Ketik <b>{need[r.id].phrase}</b> lalu tekan Terapkan lagi:
+                <input type="text" value={need[r.id].typed} autocomplete="off" onInput={e => { const v = (e.target as HTMLInputElement).value; setNeed(n => ({ ...n, [r.id]: { ...n[r.id], typed: v } })); }} /></label>}
+              <div class="rec-actions">
+                <button type="button" class="pill-btn primary" disabled={busy === r.id || (!!need[r.id] && need[r.id].typed.trim().toLowerCase() !== need[r.id].phrase)} onClick={() => void act(r, 'accept', need[r.id]?.typed)}>{ev.fix?.command ? 'Terapkan perbaikan' : 'Tandai selesai'}</button>
+                <button type="button" class="pill-btn" disabled={busy === r.id} onClick={() => void act(r, 'dismiss')}>Abaikan</button>
+              </div>
+            </li>
+          );
+        })}</ul>
+      )}
+      {done.map(([id, m]) => <p key={id} class="muted small">{m}</p>)}
+    </div>
+  );
+}
+
+type Topo = {
+  router: string;
+  interfaces: { name: string; type: string; running: boolean; disabled: boolean; comment: string; arp_hosts: number }[];
+  bridges: Record<string, { interface: string; pvid: string; disabled: boolean }[]>;
+  vlans: Record<string, string>[];
+  addresses: Record<string, string>[];
+  neighbors: Record<string, string>[];
+};
+
+export function Topology(_: Props<'topology'>) {
+  const [t, setT] = useState<Topo | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { get<Topo>('/api/topology').then(setT).catch(e => setErr((e as Error).message)); }, []);
+  if (err) return <div><h2 class="block-title">Topologi</h2><p class="muted">Topologi gagal dibaca: {err}</p></div>;
+  if (!t) return <div><h2 class="block-title">Topologi</h2><p class="muted">Membaca topologi router…</p></div>;
+  const inBridge = new Set(Object.values(t.bridges).flat().map(p => p.interface));
+  const addr = (name: string) => t.addresses.filter(a => a.interface === name).map(a => a.address).join(', ');
+  const neigh = (name: string) => t.neighbors.filter(n => n.interface === name || n.interface?.split(',').includes(name));
+  const port = (name: string) => {
+    const i = t.interfaces.find(x => x.name === name);
+    const ns = neigh(name);
+    return (
+      <li key={name} class={i?.disabled ? 'off' : i?.running ? 'up' : 'down'}>
+        <span class="dot" /> <b>{name}</b>{i?.comment ? <span class="muted"> · {i.comment}</span> : null}
+        {addr(name) && <span class="mono muted"> {addr(name)}</span>}
+        {i && i.arp_hosts > 0 && <span class="muted"> · {i.arp_hosts} host</span>}
+        {ns.map(n => <div key={n['mac-address']} class="topo-neigh">↳ {n.identity || n.address || n['mac-address']} <span class="muted">{[n.platform, n.board, n.address].filter(Boolean).join(' · ')}</span></div>)}
+      </li>
+    );
+  };
+  const loose = t.interfaces.filter(i => !inBridge.has(i.name) && !(i.name in t.bridges) && ['ether', 'wlan', 'sfp', 'vlan', 'pppoe-out', 'wg', 'lte'].some(k => i.type.startsWith(k)));
+  return (
+    <div class="topo">
+      <h2 class="block-title">Topologi · {t.router}</h2>
+      {Object.entries(t.bridges).map(([b, ports]) => (
+        <div key={b} class="topo-group"><p class="topo-title"><b>{b}</b> <span class="muted">bridge{addr(b) ? ` · ${addr(b)}` : ''}</span></p><ul>{ports.map(p => port(p.interface))}</ul></div>
+      ))}
+      {loose.length > 0 && <div class="topo-group"><p class="topo-title"><b>Port lain</b></p><ul>{loose.map(i => port(i.name))}</ul></div>}
+    </div>
+  );
+}
+
+type Param = { name: string; label: string; type: 'text' | 'integer' | 'choice' | 'customer' | 'profile'; max_len?: number; min?: number; max?: number; values?: string[] };
+type Run = { id: string; command: string; result: string | null; at: number; revertible: boolean };
+type ActionInfo = { id: string; label: string; description: string; risk: 'read' | 'write' | 'critical'; params: Param[]; preview: string | null; confirm: string | null; customers?: string[]; profiles?: string[]; runs: Run[] };
+
+const RISK_LABEL = { read: 'baca', write: 'ubah', critical: 'kritis' } as const;
+
+export function ActionButton({ block }: Props<'action_button'>) {
+  const id = block.props.action_id;
+  const [info, setInfo] = useState<ActionInfo | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const load = () => get<ActionInfo>(`/api/actions/${encodeURIComponent(id)}`).then(a => { setInfo(a); setMissing(false); }).catch(() => setMissing(true));
+  useEffect(() => { void load(); return on('actions.updated', () => void load()); }, [id]);
+  const label = block.props.label || info?.label || 'Tombol aksi';
+  if (missing) return <button type="button" disabled title="Tombol ini sudah dihapus atau belum disetujui">{label}</button>;
+  if (!info) return <button type="button" disabled>{label}</button>;
+
+  const value = (p: Param): string | number => p.type === 'integer' ? Number(values[p.name]) : (values[p.name] ?? '');
+  const ready = info.params.every(p => (values[p.name] ?? '') !== '') && (!info.confirm || typed.trim().toLowerCase() === info.confirm);
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    setBusy(true); setMsg(null);
+    try {
+      const body = { values: Object.fromEntries(info.params.map(p => [p.name, value(p)])), confirmed: true, typed: info.confirm ? typed : undefined };
+      const r = await post<{ message: string }>(`/api/actions/${encodeURIComponent(id)}/run`, body);
+      setMsg({ ok: true, text: r.message }); setTyped(''); await load();
+    } catch (err) { setMsg({ ok: false, text: (err as Error).message }); } finally { setBusy(false); }
+  };
+  const revert = async (run: Run) => {
+    setBusy(true);
+    try { const r = await post<{ message: string }>(`/api/action-runs/${run.id}/revert`); setMsg({ ok: true, text: r.message }); await load(); }
+    catch (err) { setMsg({ ok: false, text: (err as Error).message }); } finally { setBusy(false); }
+  };
+  const field = (p: Param) => {
+    const set = (v: string) => setValues(x => ({ ...x, [p.name]: v }));
+    const list = p.type === 'choice' ? p.values : p.type === 'customer' ? info.customers : p.type === 'profile' ? info.profiles : null;
+    if (list) return (
+      <select value={values[p.name] ?? ''} onChange={e => set((e.target as HTMLSelectElement).value)} required>
+        <option value="">Pilih…</option>{list.map(v => <option key={v} value={v}>{v}</option>)}
+      </select>
+    );
+    if (p.type === 'integer') return <input type="number" min={p.min} max={p.max} value={values[p.name] ?? ''} onInput={e => set((e.target as HTMLInputElement).value)} required />;
+    return <input type="text" maxLength={p.max_len} value={values[p.name] ?? ''} onInput={e => set((e.target as HTMLInputElement).value)} required />;
+  };
+
+  return (
+    <div class="action-btn">
+      <button type="button" class={info.risk === 'critical' ? 'danger' : ''} onClick={() => { setOpen(o => !o); setMsg(null); }} aria-expanded={open}>{label}</button>
+      {open && (
+        <form class="action-form" onSubmit={submit}>
+          <p class="action-head"><b>{info.label}</b><span class={`badge ${info.risk === 'critical' ? 'off' : 'idle'}`}>{RISK_LABEL[info.risk]}</span></p>
+          {info.description && <p class="muted small">{info.description}</p>}
+          {info.preview && <code class="action-preview">{info.preview}</code>}
+          {info.params.map(p => <label key={p.name}><span>{p.label}</span>{field(p)}</label>)}
+          {info.confirm && <label><span>Ketik <b>{info.confirm}</b> untuk konfirmasi</span><input type="text" value={typed} onInput={e => setTyped((e.target as HTMLInputElement).value)} autocomplete="off" /></label>}
+          {info.risk === 'write' && <p class="muted small">Perintah ini mengubah router. Menekan Jalankan berarti kamu menyetujuinya.</p>}
+          {msg && <p class={msg.ok ? 'update-msg' : 'alert'} role="status">{msg.text}</p>}
+          <div class="update-actions">
+            <button type="button" class="pill-btn" onClick={() => setOpen(false)}>Tutup</button>
+            <button type="submit" class="pill-btn primary" disabled={busy || !ready}>{busy ? 'Menjalankan…' : 'Jalankan'}</button>
+          </div>
+          {info.runs.length > 0 && (
+            <ul class="action-runs">{info.runs.map(r => (
+              <li key={r.id}><span class="muted">{new Date(r.at * 1000).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}</span> <code>{r.command}</code> <span class={r.result === 'done' ? '' : 'muted'}>{r.result === 'done' ? 'berhasil' : r.result === 'reverted' ? 'dikembalikan' : 'gagal'}</span>
+                {r.result === 'done' && r.revertible && <button type="button" class="link-btn" disabled={busy} onClick={() => void revert(r)}>Kembalikan</button>}
+              </li>
+            ))}</ul>
+          )}
+        </form>
       )}
     </div>
   );
-}
-
-export function Topology(_: Props<'topology'>) {
-  return (
-    <div>
-      <h2 class="block-title">Topologi</h2>
-      <p class="muted">Diagram topologi dari neighbor, bridge, dan ARP akan tampil di sini setelah kolektor snapshot router aktif.</p>
-    </div>
-  );
-}
-
-export function ActionButton({ block }: Props<'action_button'>) {
-  return <button type="button" disabled title="Tombol aksi custom akan aktif di tahap berikutnya">{block.props.label ?? 'Tombol aksi'}</button>;
 }

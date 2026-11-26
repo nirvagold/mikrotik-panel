@@ -619,6 +619,32 @@ async fn execute(st: &Shared, tool: &str, input: &Value) -> Result<String, Strin
             .map_err(|(_, m)| m)?;
         return Ok("Pembaru diminta memasang rilis terbaru. Panel akan restart dalam ±1 menit; bila gagal, versi lama dikembalikan otomatis.".into());
     }
+    let account = || input["account"].as_str().filter(|a| !a.is_empty()).ok_or("account kosong");
+    match tool {
+        "disconnect_session" => return crate::actions::disconnect(st, account()?).await,
+        "set_customer_enabled" => {
+            let enabled = input["enabled"].as_bool().ok_or("enabled harus true/false")?;
+            return crate::actions::set_enabled(st, account()?, enabled).await;
+        }
+        "set_customer_profile" => {
+            let profile = input["profile"].as_str().filter(|p| !p.is_empty()).ok_or("profile kosong")?;
+            return crate::actions::set_profile(st, account()?, profile).await;
+        }
+        "set_radius_user" => {
+            let attrs = input["attributes"].as_object().ok_or("attributes harus objek")?;
+            return crate::actions::set_radius(st, account()?, attrs).await;
+        }
+        "reboot_router" => return crate::actions::reboot(st).await,
+        "create_action_button" => return crate::actions::create(st, input).await,
+        "update_action_button" => return crate::actions::update(st, input).await,
+        "delete_action_button" => return crate::actions::delete(st, input["id"].as_str().unwrap_or_default()).await,
+        "run_action_button" => {
+            let (msg, run_id) = crate::actions::run(st, input["id"].as_str().unwrap_or_default(), &input["values"], "agent").await?;
+            return Ok(format!("{msg} (eksekusi {run_id})"));
+        }
+        "revert_action_run" => return crate::actions::revert_run(st, input["run_id"].as_str().unwrap_or_default(), "agent").await,
+        _ => {}
+    }
     let Some(raw) = input.get("command") else {
         return Err(format!(
             "Eksekusi `{tool}` belum tersedia di versi panel ini."
@@ -626,50 +652,7 @@ async fn execute(st: &Shared, tool: &str, input: &Value) -> Result<String, Strin
     };
     let cmd: PolicyCommand =
         serde_json::from_value(raw.clone()).map_err(|e| format!("Perintah tidak valid: {e}"))?;
-    cmd.validate().map_err(|e| e.to_string())?;
-    let args = PolicyCommand::api_pairs(&cmd.args).map_err(|e| e.to_string())?;
-    let build = |extra_id: Option<&str>| -> Result<Command, String> {
-        let mut c = Command::new(&cmd.api_path()).map_err(|e| e.to_string())?;
-        if let Some(id) = extra_id {
-            c = c.arg(".id", id).map_err(|e| e.to_string())?;
-        }
-        for (k, v) in &args {
-            c = c.arg(k, v).map_err(|e| e.to_string())?;
-        }
-        Ok(c)
-    };
-    if cmd.find.is_empty() {
-        st.router
-            .call(&build(None)?)
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok("Perintah dijalankan.".into());
-    }
-    let mut finder = Command::new(&cmd.api_find_path()).map_err(|e| e.to_string())?;
-    for (k, v) in PolicyCommand::api_pairs(&cmd.find).map_err(|e| e.to_string())? {
-        finder = finder.filter(&k, v).map_err(|e| e.to_string())?;
-    }
-    let ids: Vec<String> = st
-        .router
-        .call(&finder.proplist(&[".id"]).map_err(|e| e.to_string())?)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .filter_map(|r| r.get(".id").cloned())
-        .collect();
-    if ids.is_empty() {
-        return Err("Tidak ada objek yang cocok di router.".into());
-    }
-    if ids.len() > 20 {
-        return Err(format!("{} objek cocok; batas 20 per usulan.", ids.len()));
-    }
-    for id in &ids {
-        st.router
-            .call(&build(Some(id))?)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(format!("Perintah dijalankan pada {} objek.", ids.len()))
+    crate::actions::run_command(st, &cmd).await.map(|(msg, _)| msg)
 }
 
 async fn ai_get(State(st): State<Shared>) -> Response {

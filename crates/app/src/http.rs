@@ -46,6 +46,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/events", get(events))
         .merge(crate::api::routes())
         .merge(crate::agent_api::routes())
+        .merge(crate::actions::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,

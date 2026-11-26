@@ -56,6 +56,11 @@ impl Runs {
             .map(|(id, _)| id.clone())
     }
 
+    /// Percakapan yang sedang dikerjakan agen (paling banyak satu giliran berjalan).
+    pub fn current_conversation(&self) -> Option<String> {
+        self.inner.lock().unwrap().values().next().map(|(c, _)| c.clone())
+    }
+
     pub fn finish(&self, id: &str) {
         self.inner.lock().unwrap().remove(id);
     }
@@ -240,7 +245,17 @@ impl Host for AppHost {
 
     async fn propose(&self, p: Proposal) -> Result<String, String> {
         let id = random_token();
-        let permission = serde_json::to_value(p.permission)
+        let mut perm = p.permission;
+        let mut label = proposal_label(&p.tool, &p.input);
+        let mut preview = p.preview.clone();
+        if p.tool == "run_action_button" {
+            // Izin dan teks konfirmasi mengikuti tombol tersimpan (kritis = ketik label tombol).
+            let a = crate::actions::load(&self.state, p.input["id"].as_str().unwrap_or_default()).await?;
+            perm = perm.max(crate::actions::permission_of(&a.risk));
+            label = a.label.clone();
+            preview = a.to_json()["preview"].as_str().map(str::to_owned);
+        }
+        let permission = serde_json::to_value(perm)
             .map_err(e)?
             .as_str()
             .unwrap_or("approve")
@@ -248,9 +263,8 @@ impl Host for AppHost {
         let tool_use_id = serde_json::to_value(&p)
             .ok()
             .and_then(|v| v["tool_use_id"].as_str().map(str::to_owned));
-        let label = proposal_label(&p.tool, &p.input);
         let (pid, input) = (id.clone(), p.input.to_string());
-        let (conv, tool, preview) = (p.conversation_id.clone(), p.tool.clone(), p.preview.clone());
+        let (conv, tool) = (p.conversation_id.clone(), p.tool.clone());
         self.state
             .store
             .run(move |c| {
@@ -565,12 +579,61 @@ pub async fn run_tool(state: &Shared, name: &str, input: &Json) -> Result<Json, 
                        "update_available": !latest.is_empty() && latest != crate::VERSION,
                        "auto_update": u["auto"], "last_update": { "tag": u["last_tag"], "result": u["last_result"], "at": u["last_at"] } }))
         }
+        "snapshot_diff" => {
+            let hours = input["since_hours"].as_i64().unwrap_or(24);
+            crate::snapshots::since(state, hours).await.map_err(e)
+        }
+        "create_recommendation" => {
+            let kind = str_arg(input, "kind").filter(|k| ["performance", "security", "topology", "layout"].contains(k)).ok_or("kind tidak valid")?.to_string();
+            let title = str_arg(input, "title").ok_or("title wajib diisi")?;
+            let finding = str_arg(input, "finding").ok_or("finding wajib diisi")?;
+            if let Some(cmd) = input["fix"].get("command") {
+                let cmd: PolicyCommand = serde_json::from_value(cmd.clone()).map_err(|err| format!("fix.command tidak valid: {err}"))?;
+                cmd.validate().map_err(e)?;
+                if !cmd.placeholders().is_empty() {
+                    return Err("fix.command tidak boleh berisi placeholder.".into());
+                }
+            }
+            let text = format!("{} — {}", title.chars().take(80).collect::<String>(), finding.chars().take(600).collect::<String>());
+            let evidence = json!({ "title": title, "evidence": input["evidence"], "impact": input["impact"], "fix": input["fix"] }).to_string();
+            let id = random_token();
+            let id2 = id.clone();
+            state
+                .store
+                .run(move |c| c.execute(
+                    "INSERT INTO recommendations (id, kind, finding, evidence, status, action_id, created_at) VALUES (?1, ?2, ?3, ?4, 'open', NULL, ?5)",
+                    (id2, kind, text, evidence, now()),
+                ))
+                .await
+                .map_err(e)?;
+            state.hub.publish("recommendations.updated", json!({ "id": id }));
+            Ok(json!({ "ok": true, "id": id, "note": "Kartu saran tampil di blok Saran agen; admin bisa menerapkan atau mengabaikannya." }))
+        }
+        "show_card" => {
+            let text = input["data"].to_string();
+            if text.len() > 20_000 {
+                return Err("Data kartu terlalu besar (maks 20 KB).".into());
+            }
+            Ok(json!({ "shown": true }))
+        }
+        "set_conversation_title" => {
+            let title: String = str_arg(input, "title").ok_or("title wajib diisi")?.chars().take(60).collect();
+            let conv = state.runs.current_conversation().ok_or("Tidak ada percakapan aktif.")?;
+            let (c2, t2) = (conv.clone(), title.clone());
+            state
+                .store
+                .run(move |c| c.execute("UPDATE conversations SET title = ?1 WHERE id = ?2", (t2, c2)))
+                .await
+                .map_err(e)?;
+            state.hub.publish("conversation.updated", json!({ "id": conv, "title": title }));
+            Ok(json!({ "ok": true, "title": title }))
+        }
         _ => Err(format!("Alat `{name}` belum tersedia di versi panel ini.")),
     }
 }
 
 /// Adaptor klien RouterOS ke trait `RouterApi` milik crate agen.
-struct ApiBridge<'a>(&'a Shared);
+pub struct ApiBridge<'a>(pub &'a Shared);
 
 impl RouterApi for ApiBridge<'_> {
     async fn call(&self, path: &str, args: &[(&str, String)], filters: &[(&str, String)]) -> Result<Vec<crate::routeros::Row>, String> {

@@ -1,3 +1,4 @@
+mod actions;
 mod agent_api;
 mod agent_host;
 mod design_upgrade;
@@ -8,6 +9,7 @@ mod migrate;
 mod poller;
 mod quota;
 mod routeros;
+mod snapshots;
 mod store;
 mod telemetry;
 mod tls;
@@ -221,6 +223,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
         config,
     });
     poller::spawn(state.clone());
+    snapshots::spawn(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("gagal bind {addr}"))?;

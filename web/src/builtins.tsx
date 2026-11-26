@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { Block } from './agent';
 import { get, post, put } from './api';
-import { TrafficBars } from './blocks';
+import { ActionButton, TrafficBars } from './blocks';
 import { refreshDashboard, type Customer, type Day } from './data';
 import { on } from './events';
 import { ago, dateTime, gib } from './format';
@@ -195,13 +195,17 @@ type Action = { id: string; label: string; risk: string; approved_at: number | n
 
 function Actions() {
   const [rows, setRows] = useState<Action[] | null>(null);
-  useEffect(() => { get<{ actions: Action[] }>('/api/actions').then(r => setRows(r.actions)).catch(() => setRows([])); }, []);
+  useEffect(() => {
+    const load = () => get<{ actions: Action[] }>('/api/actions').then(r => setRows(r.actions)).catch(() => setRows([]));
+    void load();
+    return on('actions.updated', () => void load());
+  }, []);
   if (!rows) return <p class="muted">Memuat tombol aksi…</p>;
   return (
     <div>
       <h2 class="block-title">Tombol aksi</h2>
       {rows.length === 0 ? <p class="muted">Belum ada tombol aksi. Minta agen membuatnya, misalnya “buat tombol putus sesi PPPoE pelanggan”.</p> : (
-        <ul class="plain-list">{rows.map(a => <li key={a.id}><span class={`badge ${a.risk === 'critical' ? 'off' : 'idle'}`}>{a.risk}</span> {a.label} {a.approved_at ? '' : <span class="muted">(menunggu persetujuan)</span>}</li>)}</ul>
+        <ul class="plain-list action-list">{rows.map(a => <li key={a.id}><ActionButton block={{ id: a.id, span: 1, kind: 'action_button', props: { action_id: a.id, label: a.label } } as never} /> <span class={`badge ${a.risk === 'critical' ? 'off' : 'idle'}`}>{({ read: 'baca', write: 'ubah', critical: 'kritis' } as Record<string, string>)[a.risk] ?? a.risk}</span></li>)}</ul>
       )}
     </div>
   );

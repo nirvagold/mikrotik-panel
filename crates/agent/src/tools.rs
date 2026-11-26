@@ -122,19 +122,9 @@ pub fn catalog() -> Vec<ToolDef> {
         t("ask_user", Conversation, Free, "Tanyakan pilihan ganda ke admin di chat; giliran berhenti sampai admin menjawab.", obj(json!({"question": s("pertanyaan"), "options": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"type": "string"}}}), &["question", "options"])),
         t("show_card", Conversation, Free, "Tampilkan tabel, grafik, atau diagram topologi di chat.", obj(json!({"kind": {"enum": ["table", "chart", "topology"]}, "title": s("judul"), "data": {"type": "object"}}), &["kind", "data"])),
         t("set_conversation_title", Conversation, Free, "Beri judul percakapan.", obj(json!({"title": s("judul, maks 60 karakter")}), &["title"])),
-        // H. Kode panel (lewat Git + GitHub Actions; path core-locked tidak bisa diubah)
-        t("list_files", Code, Free, "Daftar file kode sumber panel.", obj(json!({"dir": s("folder relatif")}), &[])),
-        t("read_file", Code, Free, "Baca file kode sumber.", obj(json!({"path": s("path relatif"), "start_line": int(1, 100000, "baris awal"), "end_line": int(1, 100000, "baris akhir")}), &["path"])),
-        t("search_code", Code, Free, "Cari teks di kode sumber.", obj(json!({"query": s("teks/regex")}), &["query"])),
-        t("edit_file", Code, Free, "Ganti potongan teks di file (harus muncul tepat sekali). Hanya di salinan kerja.", obj(json!({"path": s("path"), "old": s("teks lama"), "new": s("teks baru")}), &["path", "old", "new"])),
-        t("create_file", Code, Free, "Buat file baru di salinan kerja.", obj(json!({"path": s("path"), "content": s("isi")}), &["path", "content"])),
-        t("delete_file", Code, Free, "Hapus file di salinan kerja.", obj(json!({"path": s("path")}), &["path"])),
-        t("show_diff", Code, Free, "Tampilkan diff salinan kerja terhadap versi terpasang.", obj(json!({}), &[])),
-        t("build_and_test", Code, Free, "Commit ke branch agen, push, dan jalankan GitHub Actions (cargo test + build). Menunggu hasil.", obj(json!({"message": s("pesan commit")}), &["message"])),
-        t("deploy_code", Code, Approve, "Pasang build yang lulus test: unduh binary, cek checksum, uji di port percobaan, swap, rollback otomatis jika gagal.", obj(json!({"build_id": s("ID build Actions")}), &["build_id"])),
+        // H. Update panel (lewat pembaru di server; agen tidak punya akses edit kode/GitHub)
         t("check_update", Code, Free, "Cek rilis panel terbaru di GitHub lewat pembaru server. Hasil: versi terpasang, versi terbaru, ada update atau tidak.", obj(json!({}), &[])),
         t("install_update", Code, Approve, "Pasang rilis panel terbaru dari GitHub (hash dicek, database dicadangkan, rollback otomatis bila gagal). Panel restart ±1 menit.", obj(json!({}), &[])),
-        t("rollback_code", Code, Free, "Kembali ke build terpasang sebelumnya.", obj(json!({"release_id": s("ID rilis, kosong = sebelumnya")}), &[])),
     ]
 }
 
@@ -156,7 +146,7 @@ mod tests {
             assert_eq!(tool.input_schema["type"], "object", "{}", tool.name);
             assert!(tool.name.len() <= 64 && tool.name.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
         }
-        assert!(tools.len() >= 55, "{}", tools.len());
+        assert!(tools.len() >= 50, "{}", tools.len());
     }
 
     #[test]

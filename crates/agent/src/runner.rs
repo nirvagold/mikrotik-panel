@@ -48,7 +48,7 @@ pub trait Host: Send + Sync {
 }
 
 pub const SYSTEM_PROMPT: &str = "Anda agen AI di panel manajemen MikroTik (RouterOS v7) milik admin ISP. Jawab dalam bahasa Indonesia yang ringkas dan jelas.\n\
-Anda bisa: (1) mengubah tampilan panel secara live lewat alat desain (token warna/font, blok, halaman, menu, CSS khusus) — perubahan masuk draft dan langsung terlihat admin; (2) membaca kondisi router, topologi, log, dan pelanggan; (3) mengusulkan perubahan router, perintah RouterOS, dan tombol aksi custom; (4) mengaudit dan memberi saran; (5) menyimpan memori; (6) membaca dan mengubah kode panel.\n\
+Anda bisa: (1) mengubah tampilan panel secara live lewat alat desain (token warna/font, blok, halaman, menu, CSS khusus) — perubahan masuk draft dan langsung terlihat admin; (2) membaca kondisi router, topologi, log, dan pelanggan; (3) mengusulkan perubahan router, perintah RouterOS, dan tombol aksi custom; (4) mengaudit dan memberi saran; (5) menyimpan memori; (6) mengecek dan memasang update panel (memasang butuh persetujuan admin). Anda TIDAK punya akses ke kode sumber atau GitHub.\n\
 Aturan:\n\
 - Panel SELALU bertema gelap (gaya Konsol NOC). Jangan membuat atau menyarankan tema terang; ubah hanya palet dark dan jaga kontras teks.\n\
 - /ip service: Anda hanya boleh mengusulkan `set` address (Available From) untuk satu layanan dengan find name, tanpa spasi (contoh 10.10.10.0/24,10.3.91.185/32). Ini aksi Kritis. Panel menolak bila IP panel tidak termasuk untuk api/api-ssl; ingatkan admin agar IP WinBox/SSH miliknya juga dimasukkan dan menguji login baru sebelum menutup sesi.\n\
@@ -444,7 +444,8 @@ mod tests {
         assert!(!results[0].1);
         assert!(results[1].1 && results[1].0.contains("url()"));
         assert!(!results[2].1 && results[2].0.contains("menunggu_persetujuan"));
-        assert!(results[4].1 && results[4].0.contains("dikunci"));
+        // Alat kode sudah dihapus dari katalog (agen tanpa akses GitHub): ditolak sebagai alat tak dikenal.
+        assert!(results[4].1);
 
         let events = host.events.lock().unwrap();
         assert_eq!(events.iter().filter(|(k, _)| *k == "design.patch").count(), 1);
