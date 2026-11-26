@@ -1,7 +1,7 @@
 // Cermin dari crates/agent/src/design.rs. Server adalah sumber kebenaran;
 // frontend hanya merender spec yang sudah tervalidasi.
 export type ThemeMode = 'light' | 'dark' | 'system';
-export type Font = 'system' | 'inter' | 'ibm_plex_sans' | 'source_sans' | 'serif' | 'mono';
+export type Font = 'system' | 'geist' | 'geist_mono' | 'inter' | 'ibm_plex_sans' | 'source_sans' | 'serif' | 'mono';
 
 export type Palette = {
   bg: string; surface: string; surface_alt: string; text: string; muted: string; border: string;

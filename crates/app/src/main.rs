@@ -1,5 +1,6 @@
 mod agent_api;
 mod agent_host;
+mod design_upgrade;
 mod api;
 mod events;
 mod http;
@@ -192,6 +193,11 @@ async fn run(config: Config) -> anyhow::Result<()> {
         "router.password_encrypted tidak bisa dibuka; buat ulang dengan `mikrotik-panel encrypt`",
     )?;
     let store = store::Store::open(&config.database).context("gagal membuka database")?;
+    match store.run(design_upgrade::upgrade).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("{n} versi desain bawaan lama diganti ke desain bawaan baru"),
+        Err(e) => tracing::warn!("gagal memperbarui desain bawaan: {e}"),
+    }
     let router = Arc::new(routeros::RouterOs::new(routeros::RouterTarget {
         host: config.router.host.clone(),
         port: config.router.port,

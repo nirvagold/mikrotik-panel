@@ -4,6 +4,8 @@ import type { DesignSpec, Font, Palette, Tokens } from './types';
 
 const FONTS: Record<Font, string> = {
   system: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+  geist: 'Geist, system-ui, -apple-system, "Segoe UI", sans-serif',
+  geist_mono: '"Geist Mono", ui-monospace, Menlo, Consolas, monospace',
   inter: 'Inter, system-ui, sans-serif',
   ibm_plex_sans: '"IBM Plex Sans", system-ui, sans-serif',
   source_sans: '"Source Sans 3", "Source Sans Pro", system-ui, sans-serif',
@@ -30,7 +32,7 @@ export function tokensCss(t: Tokens): string {
   // Token juga dipasang di host panel agen (di luar .panel-root) supaya panel ikut tema,
   // sementara CSS khusus agen (berawalan .panel-root) tetap tidak bisa menjangkaunya.
   const sel = '.panel-root,#agent-host';
-  // Panel selalu gelap (Konsol NOC): palet light dan mode lama diabaikan.
+  // Panel selalu gelap (gaya Next.js): palet light dan mode lama diabaikan.
   return `${sel}{${shared}${vars(t.dark)}color-scheme:dark}`;
 }
 

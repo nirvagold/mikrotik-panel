@@ -48,8 +48,10 @@ const userText = (m: ChatMessage) => {
 const isToolResults = (m: ChatMessage) => m.role === 'user' && m.parts.every(p => p.type === 'tool_result');
 
 export function AgentPanel() {
-  const [open, setOpen] = useState(() => storage('agent-open') !== '0');
-  const [docked, setDocked] = useState(() => storage('agent-docked') !== '0');
+  // Popup (permintaan Usep 2026-11-26): tertutup saat panel dibuka, muncul mengambang dari tombol
+  // di pojok kanan bawah. Admin masih bisa menempelkannya ke samping; pilihan itu diingat.
+  const [open, setOpen] = useState(false);
+  const [docked, setDocked] = useState(() => storage('agent-mode') === 'docked');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversation, setConversation] = useState<string | null>(() => storage('agent-conversation') || null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -85,8 +87,7 @@ export function AgentPanel() {
   useEffect(() => { void loadConversations(); void loadMessages(conversation); }, []);
   useEffect(() => { storage('agent-conversation', conversation ?? ''); }, [conversation]);
   useEffect(() => {
-    storage('agent-open', open ? '1' : '0');
-    storage('agent-docked', docked ? '1' : '0');
+    storage('agent-mode', docked ? 'docked' : 'popup');
     // Halaman utama memberi ruang untuk panel yang ditempel di samping.
     if (open && docked) document.documentElement.dataset.agentDock = ''; else delete document.documentElement.dataset.agentDock;
   }, [open, docked]);
@@ -213,6 +214,7 @@ export function AgentPanel() {
       const last = [...messages].reverse().find(m => m.role === 'user' && !isToolResults(m));
       if (last) { e.preventDefault(); startEdit(last); }
     } else if (e.key === 'Escape' && editing) { setEditing(null); updateDraft(''); }
+    else if (e.key === 'Escape' && !running && !docked) { e.preventDefault(); setOpen(false); }
   }
 
   function regenerate(assistantIndex: number) {
@@ -257,7 +259,7 @@ export function AgentPanel() {
 
   if (!open) {
     return <button class="launcher" type="button" onClick={() => { setOpen(true); requestAnimationFrame(() => input.current?.focus()); }} aria-label="Buka agen AI (Ctrl+K)">
-      <span aria-hidden="true">✦</span> Agen AI {running && <i class="pulse" aria-label="sedang bekerja" />}
+      <span class="launcher-mark" aria-hidden="true">✦</span><span class="launcher-text">Agen AI</span>{running && <i class="pulse" aria-label="sedang bekerja" />}
     </button>;
   }
 
@@ -271,8 +273,8 @@ export function AgentPanel() {
           {conversations.map(c => <option key={c.id} value={c.id}>{c.title || 'Tanpa judul'}</option>)}
         </select>
         <button class="icon" type="button" title="Percakapan baru" aria-label="Percakapan baru" onClick={newConversation}>＋</button>
-        <button class="icon" type="button" title={docked ? 'Mengambang' : 'Tempel di samping'} aria-label="Ubah posisi panel" onClick={() => setDocked(d => !d)}>{docked ? '⧉' : '▥'}</button>
-        <button class="icon" type="button" title="Tutup (Ctrl+K)" aria-label="Tutup panel agen" onClick={() => setOpen(false)}>✕</button>
+        <button class="icon" type="button" title={docked ? 'Jadikan popup' : 'Tempel di samping'} aria-label="Ubah posisi panel" onClick={() => setDocked(d => !d)}>{docked ? '⧉' : '▥'}</button>
+        <button class="icon" type="button" title="Tutup (Esc / Ctrl+K)" aria-label="Tutup panel agen" onClick={() => setOpen(false)}>✕</button>
       </header>
 
       {design.hasUnpublished.value && (

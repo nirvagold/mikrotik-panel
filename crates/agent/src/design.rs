@@ -45,6 +45,8 @@ pub enum ThemeMode {
 #[serde(rename_all = "snake_case")]
 pub enum Font {
     System,
+    Geist,
+    GeistMono,
     Inter,
     IbmPlexSans,
     SourceSans,
