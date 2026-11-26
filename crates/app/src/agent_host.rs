@@ -547,6 +547,24 @@ pub async fn run_tool(state: &Shared, name: &str, input: &Json) -> Result<Json, 
             Ok(json!({ "days": days, "daily": hist["history"], "top_accounts": top,
                        "note": "Data per jam belum dicatat; jam sibuk belum tersedia." }))
         }
+        "check_update" => {
+            let before = crate::http::read_update_status().await.map(|u| u["checked_at"].clone());
+            crate::http::request_update("check").await.map_err(|(_, m)| m)?;
+            let mut status = None;
+            for _ in 0..40 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let now = crate::http::read_update_status().await;
+                if now.as_ref().map(|u| u["checked_at"].clone()) != before {
+                    status = now;
+                    break;
+                }
+            }
+            let u = status.ok_or("Pembaru belum menjawab dalam 40 detik; coba lagi nanti.")?;
+            let latest = u["latest"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+            Ok(json!({ "installed": crate::VERSION, "latest": u["latest"], "check": u["check"],
+                       "update_available": !latest.is_empty() && latest != crate::VERSION,
+                       "auto_update": u["auto"], "last_update": { "tag": u["last_tag"], "result": u["last_result"], "at": u["last_at"] } }))
+        }
         _ => Err(format!("Alat `{name}` belum tersedia di versi panel ini.")),
     }
 }

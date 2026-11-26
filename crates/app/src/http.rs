@@ -42,6 +42,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/logout", post(logout))
         .route("/api/session", get(session_info))
         .route("/api/version", get(version_info))
+        .route("/api/update/request", post(update_request))
         .route("/api/events", get(events))
         .merge(crate::api::routes())
         .merge(crate::agent_api::routes())
@@ -212,12 +213,77 @@ const UPDATE_STATUS: &str = "/var/lib/mikrotik-panel-update/status.json";
 
 /// Versi panel yang berjalan + status pembaru otomatis bila terpasang (null bila tidak ada).
 async fn version_info() -> Response {
+    let update = read_update_status().await;
+    Json(json!({ "version": crate::VERSION, "update": update })).into_response()
+}
+
+/// File permintaan untuk pembaru: ditulis panel (user dinamis) di StateDirectory-nya, dipantau
+/// unit systemd `mikrotik-panel-update-request.path` yang menjalankan `mikrotik-panel-update --request`
+/// sebagai root. Isinya hanya kata `check` atau `install`; pembaru tidak menerima isi lain.
+const UPDATE_REQUEST: &str = "/var/lib/mikrotik-panel/update-request";
+
+#[derive(Deserialize)]
+struct UpdateRequest {
+    action: String,
+}
+
+/// Tombol "Cek update" / "Pasang sekarang" di panel.
+async fn update_request(Json(req): Json<UpdateRequest>) -> Response {
+    match request_update(&req.action).await {
+        Ok(()) => Json(json!({ "ok": true, "action": req.action })).into_response(),
+        Err((status, msg)) => error(status, &msg),
+    }
+}
+
+/// Kirim permintaan ke pembaru (dipakai tombol panel dan alat agen).
+pub async fn request_update(action: &str) -> Result<(), (StatusCode, String)> {
+    if !matches!(action, "check" | "install") {
+        return Err((StatusCode::BAD_REQUEST, "aksi harus check atau install".into()));
+    }
+    match read_update_status().await {
+        Some(u) if u["on_demand"] == true => {}
+        Some(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Pembaru di server belum mendukung tombol ini; aktif setelah update otomatis berikutnya.".into(),
+            ));
+        }
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Pembaru otomatis belum terpasang di server ini (pasang lewat deploy/install.sh).".into(),
+            ));
+        }
+    }
+    let path = std::env::var("PANEL_UPDATE_REQUEST").unwrap_or_else(|_| UPDATE_REQUEST.into());
+    let path = std::path::Path::new(&path);
+    if tokio::fs::symlink_metadata(path).await.is_ok() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Permintaan sebelumnya masih diproses. Tunggu sebentar.".into(),
+        ));
+    }
+    let tmp = path.with_extension("tmp");
+    let written = async {
+        tokio::fs::write(&tmp, format!("{action}\n")).await?;
+        tokio::fs::rename(&tmp, path).await
+    }
+    .await;
+    written.map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Gagal mengirim permintaan ke pembaru: {e}"),
+        )
+    })
+}
+
+/// Isi status.json pembaru, atau None bila pembaru belum terpasang.
+pub async fn read_update_status() -> Option<serde_json::Value> {
     let path = std::env::var("PANEL_UPDATE_STATUS").unwrap_or_else(|_| UPDATE_STATUS.into());
-    let update = tokio::fs::read_to_string(path)
+    tokio::fs::read_to_string(path)
         .await
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    Json(json!({ "version": crate::VERSION, "update": update })).into_response()
+        .and_then(|t| serde_json::from_str(&t).ok())
 }
 
 /// Dipakai systemd dan proses deploy: 200 bila database sehat, 503 bila tidak.

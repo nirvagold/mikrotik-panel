@@ -1,0 +1,8 @@
+[Unit]
+Description=Jalankan permintaan update dari tombol Panel MikroTik
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mikrotik-panel-update --request

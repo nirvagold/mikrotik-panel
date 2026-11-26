@@ -6,6 +6,7 @@
 #   mikrotik-panel-update --version TAG   pasang rilis tertentu (mis. v0.1.2), termasuk turun versi
 #   mikrotik-panel-update --rollback kembali ke rilis sebelumnya beserta database-nya
 #   mikrotik-panel-update --status   tampilkan versi terpasang dan hasil update terakhir
+#   mikrotik-panel-update --request  jalankan permintaan dari tombol panel (dipicu unit .path)
 #
 # Alur: unduh binary + SHA256SUMS → cocokkan hash → hentikan panel → cadangkan database →
 # ganti symlink current → nyalakan → cek /api/health sampai 45 detik. Gagal = database dan
@@ -20,6 +21,8 @@ SERVICE=mikrotik-panel
 KEEP=3
 HEALTH_TIMEOUT=45
 STATE=/var/lib/mikrotik-panel-update
+REQUEST=/var/lib/mikrotik-panel/update-request
+UNITS="mikrotik-panel.service mikrotik-panel-update.service mikrotik-panel-update.timer mikrotik-panel-update-request.service mikrotik-panel-update-request.path"
 # shellcheck source=/dev/null
 [ -r "$CONF" ] && . "$CONF"
 
@@ -45,9 +48,10 @@ write_status() { # $1 = tag terbaru di GitHub (boleh kosong), $2 = hasil cek: ok
   f="$STATE/status.json"
   local latest="${1:-}"
   [ -n "$latest" ] || latest=$(sed -n 's/.*"latest":"\([^"]*\)".*/\1/p' "$f" 2>/dev/null || true)
-  printf '{"installed":"%s","latest":"%s","checked_at":"%s","check":"%s","last_tag":"%s","last_at":"%s","last_result":"%s","auto":%s}\n' \
+  printf '{"installed":"%s","latest":"%s","checked_at":"%s","check":"%s","last_tag":"%s","last_at":"%s","last_result":"%s","auto":%s,"on_demand":%s}\n' \
     "$(current_tag)" "$latest" "$(date -Is)" "${2:-ok}" "$last_tag" "$last_at" "$last_result" \
-    "$(systemctl is-enabled mikrotik-panel-update.timer 9>&- >/dev/null 2>&1 && echo true || echo false)" > "$f.tmp"
+    "$(systemctl is-enabled mikrotik-panel-update.timer 9>&- >/dev/null 2>&1 && echo true || echo false)" \
+    "$(systemctl is-active mikrotik-panel-update-request.path 9>&- >/dev/null 2>&1 && echo true || echo false)" > "$f.tmp"
   chmod 644 "$f.tmp" && mv -f "$f.tmp" "$f"
 }
 
@@ -180,6 +184,48 @@ self_update() { # perbarui skrip ini sendiri dari rilis yang sama (hash dicek)
   sums=$(grep " mikrotik-panel-update\$" "$tmp/SHA256SUMS") || return 0
   (cd "$tmp" && echo "$sums" | sha256sum -c --quiet -) || return 0
   cmp -s "$tmp/mikrotik-panel-update" "$0" || install -m755 "$tmp/mikrotik-panel-update" /usr/local/sbin/mikrotik-panel-update
+  update_units "$url" "$tmp"
+}
+
+update_units() { # pasang unit systemd baru/berubah dari rilis yang sama (hash dicek)
+  local url="$1" tmp="$2" u sums changed=""
+  for u in $UNITS; do
+    curl -fsSL --max-time 60 -o "$tmp/$u" "$url/$u" 2>/dev/null || continue
+    sums=$(grep " $u\$" "$tmp/SHA256SUMS") || continue
+    (cd "$tmp" && echo "$sums" | sha256sum -c --quiet -) || continue
+    cmp -s "$tmp/$u" "/etc/systemd/system/$u" && continue
+    install -m644 "$tmp/$u" "/etc/systemd/system/$u"
+    changed="$changed $u"
+  done
+  [ -n "$changed" ] || return 0
+  log "Unit systemd diperbarui:$changed"
+  systemctl daemon-reload 9>&- || true
+  # tombol "Cek update" di panel butuh unit .path ini
+  [ -f /etc/systemd/system/mikrotik-panel-update-request.path ] &&
+    systemctl enable --now mikrotik-panel-update-request.path 9>&- >/dev/null 2>&1 || true
+  # mikrotik-panel.service berubah: berlaku saat panel dinyalakan ulang berikutnya
+  return 0
+}
+
+handle_request() { # isi file permintaan dari panel: hanya "check" atau "install"
+  local req=""
+  if [ -f "$REQUEST" ] && [ ! -L "$REQUEST" ]; then
+    req=$(head -c 16 "$REQUEST" | tr -dc 'a-z')
+  fi
+  rm -f "$REQUEST"
+  case "$req" in
+    check)
+      log "Permintaan dari panel: cek update"
+      tag=$(latest_tag) || true
+      write_status "${tag:-}" "$([ -n "${tag:-}" ] && echo ok || echo gagal)" ;;
+    install)
+      log "Permintaan dari panel: pasang update"
+      tag=$(latest_tag) || true
+      [ -n "${tag:-}" ] || { write_status "" gagal; die "tidak bisa membaca rilis terbaru dari GitHub"; }
+      trap 'write_status "$tag" ok' EXIT
+      install_tag "$tag" auto ;;
+    *) [ -z "$req" ] || log "Permintaan panel tidak dikenal, diabaikan" ;;
+  esac
 }
 
 rollback() {
@@ -216,10 +262,11 @@ case "${1:-}" in
     trap 'write_status "" ok' EXIT
     install_tag "$2" manual ;;
   --rollback) trap 'write_status "" ok' EXIT; rollback ;;
+  --request) handle_request ;;
   --status)
     echo "Terpasang: $(current_tag || echo -)"
     echo "Update terakhir: $(cat "$STATE/last" 2>/dev/null || echo belum pernah)"
     echo "Rilis tersimpan: $(ls -1t "$BASE/releases" | tr '\n' ' ')"
     systemctl list-timers mikrotik-panel-update.timer --no-pager 2>/dev/null | sed -n 2p ;;
-  *) sed -n 2,11p "$0"; exit 2 ;;
+  *) sed -n 2,12p "$0"; exit 2 ;;
 esac

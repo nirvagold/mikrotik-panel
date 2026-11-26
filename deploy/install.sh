@@ -6,7 +6,8 @@
 # Yang dilakukan:
 #  1. unduh rilis terbaru dari GitHub dan cocokkan SHA256
 #  2. bila belum ada /etc/mikrotik-panel/config.toml: tanya port, akses, router, kata sandi, lalu buat config
-#  3. pasang layanan systemd mikrotik-panel + pembaru otomatis mikrotik-panel-update (timer tiap jam)
+#  3. pasang layanan systemd mikrotik-panel + pembaru otomatis mikrotik-panel-update (timer tiap jam,
+#     plus unit .path untuk tombol "Cek update" di panel)
 #  4. nyalakan panel dan cek kesehatannya
 # Aman dijalankan ulang: config yang sudah ada tidak disentuh.
 set -euo pipefail
@@ -38,7 +39,7 @@ say "Rilis: $TAG ($ARCH)"
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 URL="${GITHUB_URL:-https://github.com}/$REPO/releases/download/$TAG"
-FILES="mikrotik-panel-$ARCH mikrotik-panel-update mikrotik-panel.service mikrotik-panel-update.service mikrotik-panel-update.timer config.example.toml"
+FILES="mikrotik-panel-$ARCH mikrotik-panel-update mikrotik-panel.service mikrotik-panel-update.service mikrotik-panel-update.timer mikrotik-panel-update-request.service mikrotik-panel-update-request.path config.example.toml"
 curl -fsSL -o "$TMP/SHA256SUMS" "$URL/SHA256SUMS"
 for f in $FILES; do
   curl -fsSL -o "$TMP/$f" "$URL/$f" || die "unduh $f gagal"
@@ -86,7 +87,8 @@ fi
 
 say "Memasang layanan systemd"
 install -m755 "$TMP/mikrotik-panel-update" /usr/local/sbin/mikrotik-panel-update
-install -m644 "$TMP/mikrotik-panel.service" "$TMP/mikrotik-panel-update.service" "$TMP/mikrotik-panel-update.timer" /etc/systemd/system/
+install -m644 "$TMP/mikrotik-panel.service" "$TMP/mikrotik-panel-update.service" "$TMP/mikrotik-panel-update.timer" \
+  "$TMP/mikrotik-panel-update-request.service" "$TMP/mikrotik-panel-update-request.path" /etc/systemd/system/
 [ -f "$ETC/update.conf" ] || cat > "$ETC/update.conf" <<EOF
 # Pengaturan pembaru otomatis. Matikan update otomatis: systemctl disable --now mikrotik-panel-update.timer
 REPO="$REPO"
@@ -101,7 +103,7 @@ systemctl enable "mikrotik-panel.service" >/dev/null
 
 say "Memasang $TAG"
 /usr/local/sbin/mikrotik-panel-update --version "$TAG"
-systemctl enable --now mikrotik-panel-update.timer >/dev/null
+systemctl enable --now mikrotik-panel-update.timer mikrotik-panel-update-request.path >/dev/null
 
 PORT=$(sed -n 's/^port = \([0-9]*\).*/\1/p' "$CONFIG" | head -1)
 say "Selesai. Panel $TAG berjalan di port $PORT."

@@ -78,7 +78,24 @@ input[type="number"] { width: 6.5em; }
 .pill.bad b { color: var(--danger); }
 .pill-btn { cursor: pointer; color: var(--text); border-radius: calc(var(--radius) * .75); height: 32px; padding: 0 12px; font-size: 13px; }
 .pill-btn:hover:not(:disabled) { background: var(--surface-alt); opacity: 1; }
-.pill.version { cursor: help; font-family: var(--font-mono); }
+.pill.version { cursor: pointer; font-family: var(--font-mono); }
+.pill.version:hover { background: var(--surface-alt); }
+.version-wrap { position: relative; display: inline-flex; }
+.update-pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 70; width: min(320px, calc(100vw - 32px)); padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 12px 32px rgb(0 0 0 / .45); color: var(--text); font: 13px var(--font); white-space: normal; }
+.update-pop p { margin: 0 0 10px; }
+.update-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.update-pop .tag { font: 500 11px var(--font-mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
+.update-pop .tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.update-pop .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.update-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 10px; }
+.update-pop dt { color: var(--muted); }
+.update-pop dd { margin: 0; text-align: right; }
+.update-pop .small { font-size: 12px; }
+.update-msg { padding: 8px 10px; border-radius: calc(var(--radius) * .75); background: var(--surface-alt); }
+.update-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pill-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.pill-btn.primary:hover:not(:disabled) { background: var(--accent); opacity: .9; }
+.pill-btn:disabled { opacity: .5; cursor: default; }
 .pill.version b { color: var(--text); }
 .pill.version.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .pill.version.warn b { color: var(--warn); }

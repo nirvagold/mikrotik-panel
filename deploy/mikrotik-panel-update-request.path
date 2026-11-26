@@ -1,0 +1,12 @@
+[Unit]
+Description=Pantau tombol Cek update di Panel MikroTik
+
+[Path]
+# Panel (user dinamis) menulis file ini di StateDirectory-nya; isinya hanya dibaca sebagai
+# kata "check" atau "install", lalu file dihapus oleh mikrotik-panel-update --request.
+PathExists=/var/lib/mikrotik-panel/update-request
+PathExists=/var/lib/private/mikrotik-panel/update-request
+Unit=mikrotik-panel-update-request.service
+
+[Install]
+WantedBy=multi-user.target

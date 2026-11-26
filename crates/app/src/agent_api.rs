@@ -613,6 +613,12 @@ async fn execute(st: &Shared, tool: &str, input: &Value) -> Result<String, Strin
         let op = st.quota.take(&op.id, account).map_err(|e| e.to_string())?;
         return Ok(st.quota.apply(&st.router, &op).await);
     }
+    if tool == "install_update" {
+        crate::http::request_update("install")
+            .await
+            .map_err(|(_, m)| m)?;
+        return Ok("Pembaru diminta memasang rilis terbaru. Panel akan restart dalam ±1 menit; bila gagal, versi lama dikembalikan otomatis.".into());
+    }
     let Some(raw) = input.get("command") else {
         return Err(format!(
             "Eksekusi `{tool}` belum tersedia di versi panel ini."

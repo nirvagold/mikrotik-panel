@@ -83,40 +83,99 @@ function Login() {
   );
 }
 
-type UpdateStatus = { installed: string; latest: string; checked_at: string; check: string; last_tag: string; last_at: string; last_result: string; auto: boolean };
+type UpdateStatus = { installed: string; latest: string; checked_at: string; check: string; last_tag: string; last_at: string; last_result: string; auto: boolean; on_demand?: boolean };
+type VersionInfo = { version: string; update: UpdateStatus | null };
 
 function when(iso: string): string {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-/** Versi panel di bilah atas; tooltip berisi status pembaru otomatis. */
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/** Versi panel di bilah atas. Klik: status pembaru + tombol Cek update / Pasang sekarang. */
 function VersionPill() {
-  const [info, setInfo] = useState<{ version: string; update: UpdateStatus | null } | null>(null);
+  const [info, setInfo] = useState<VersionInfo | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<'' | 'check' | 'install'>('');
+  const [msg, setMsg] = useState('');
+  const box = useRef<HTMLSpanElement>(null);
+  const load = () => get<VersionInfo>('/api/version').then(v => { setInfo(v); return v; });
   useEffect(() => {
-    const load = () => get<{ version: string; update: UpdateStatus | null }>('/api/version').then(setInfo).catch(() => {});
-    load();
-    const t = setInterval(load, 10 * 60 * 1000);
+    load().catch(() => {});
+    const t = setInterval(() => load().catch(() => {}), 10 * 60 * 1000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => { if (e instanceof KeyboardEvent ? e.key === 'Escape' : !box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close); };
+  }, [open]);
   if (!info) return null;
   const u = info.update;
   const latest = u?.latest?.replace(/^v/, '');
   const behind = !!latest && latest !== info.version;
   const failed = u?.last_result === 'rollback' && u.last_tag.replace(/^v/, '') !== info.version;
   const tone = failed ? 'bad' : behind ? 'warn' : '';
-  const lines = [`Panel v${info.version}`];
-  if (!u) lines.push('Pembaru otomatis belum terpasang di server ini.');
-  else {
-    lines.push(u.auto ? 'Update otomatis: aktif (cek tiap jam)' : 'Update otomatis: mati');
-    lines.push(`Rilis terbaru di GitHub: ${u.latest || 'belum terbaca'}`);
-    lines.push(`Dicek: ${when(u.checked_at)}${u.check === 'gagal' ? ' (gagal menghubungi GitHub)' : ''}`);
-    if (u.last_tag) lines.push(`Update terakhir: ${u.last_tag} ${u.last_result === 'ok' ? 'berhasil' : 'gagal, dikembalikan'} (${when(u.last_at)})`);
-    if (behind && !failed) lines.push(`Versi ${u.latest} akan dipasang otomatis pada pengecekan berikutnya.`);
-  }
+
+  const check = async () => {
+    setBusy('check'); setMsg('Menghubungi GitHub…');
+    try {
+      const before = u?.checked_at;
+      await post('/api/update/request', { action: 'check' });
+      for (let i = 0; i < 30; i++) {
+        await sleep(2000);
+        const v = await load();
+        if (v.update?.checked_at !== before) {
+          const l = v.update?.latest?.replace(/^v/, '');
+          setMsg(v.update?.check === 'gagal' ? 'Gagal menghubungi GitHub. Coba lagi nanti.' : l && l !== v.version ? `Versi ${v.update!.latest} tersedia.` : 'Panel sudah versi terbaru.');
+          return;
+        }
+      }
+      setMsg('Pembaru belum menjawab. Coba lagi sebentar lagi.');
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(''); }
+  };
+  const install = async () => {
+    setBusy('install'); setMsg(`Memasang ${u?.latest}… panel akan restart sebentar.`);
+    try {
+      await post('/api/update/request', { action: 'install' });
+      const from = info.version;
+      for (let i = 0; i < 90; i++) {
+        await sleep(2000);
+        const v = await load().catch(() => null);
+        if (v && v.version !== from) { setMsg(`Berhasil, sekarang v${v.version}. Memuat ulang…`); await sleep(1200); location.reload(); return; }
+        if (v?.update?.last_result === 'rollback' && v.update.last_tag === u?.latest) { setMsg(`Pemasangan ${u?.latest} gagal; versi lama dikembalikan otomatis.`); return; }
+      }
+      setMsg('Belum selesai. Cek lagi beberapa menit lagi.');
+    } catch (e) { setMsg((e as Error).message); } finally { setBusy(''); }
+  };
+
   return (
-    <span class={`pill version ${tone}`} title={lines.join('\n')} aria-label={lines.join('. ')}>
-      v{info.version}{behind ? <b> → {u!.latest}</b> : null}
+    <span class="version-wrap" ref={box}>
+      <button type="button" class={`pill version ${tone}`} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(o => !o)} title="Versi panel dan update">
+        v{info.version}{behind ? <b> → {u!.latest}</b> : null}
+      </button>
+      {open && (
+        <div class="update-pop" role="dialog" aria-label="Update panel">
+          <p class="update-head"><b>Panel v{info.version}</b>{behind ? <span class="tag warn">{u!.latest} tersedia</span> : u?.latest ? <span class="tag ok">terbaru</span> : null}</p>
+          {!u ? <p class="muted">Pembaru otomatis belum terpasang di server ini.</p> : (
+            <dl>
+              <dt>Update otomatis</dt><dd>{u.auto ? 'aktif, cek tiap jam' : 'mati'}</dd>
+              <dt>Terbaru di GitHub</dt><dd>{u.latest || 'belum terbaca'}</dd>
+              <dt>Dicek</dt><dd>{when(u.checked_at)}{u.check === 'gagal' ? ' (gagal)' : ''}</dd>
+              {u.last_tag && <><dt>Update terakhir</dt><dd>{u.last_tag} {u.last_result === 'ok' ? 'berhasil' : 'gagal, dikembalikan'} · {when(u.last_at)}</dd></>}
+            </dl>
+          )}
+          {u && !u.on_demand && <p class="muted small">Tombol aktif setelah pembaru di server memperbarui dirinya (update otomatis berikutnya).</p>}
+          {msg && <p class="update-msg" role="status">{msg}</p>}
+          <div class="update-actions">
+            <button type="button" class="pill-btn" disabled={!!busy || !u?.on_demand} onClick={check}>{busy === 'check' ? 'Mengecek…' : 'Cek update'}</button>
+            {behind && !failed && <button type="button" class="pill-btn primary" disabled={!!busy || !u?.on_demand} onClick={install}>{busy === 'install' ? 'Memasang…' : `Pasang ${u!.latest}`}</button>}
+          </div>
+        </div>
+      )}
     </span>
   );
 }

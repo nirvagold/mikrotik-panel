@@ -57,7 +57,8 @@ jobs:
           done
           cp deploy/update.sh dist/mikrotik-panel-update
           cp deploy/install.sh deploy/mikrotik-panel.service deploy/mikrotik-panel-update.service \
-             deploy/mikrotik-panel-update.timer deploy/config.example.toml dist/
+             deploy/mikrotik-panel-update.timer deploy/mikrotik-panel-update-request.service \
+             deploy/mikrotik-panel-update-request.path deploy/config.example.toml dist/
           cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
           if [ -n "${PANEL_VERSION:-}" ]; then
             test "$(./mikrotik-panel-x86_64 version)" = "$PANEL_VERSION"

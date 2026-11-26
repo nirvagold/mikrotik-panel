@@ -132,6 +132,8 @@ pub fn catalog() -> Vec<ToolDef> {
         t("show_diff", Code, Free, "Tampilkan diff salinan kerja terhadap versi terpasang.", obj(json!({}), &[])),
         t("build_and_test", Code, Free, "Commit ke branch agen, push, dan jalankan GitHub Actions (cargo test + build). Menunggu hasil.", obj(json!({"message": s("pesan commit")}), &["message"])),
         t("deploy_code", Code, Approve, "Pasang build yang lulus test: unduh binary, cek checksum, uji di port percobaan, swap, rollback otomatis jika gagal.", obj(json!({"build_id": s("ID build Actions")}), &["build_id"])),
+        t("check_update", Code, Free, "Cek rilis panel terbaru di GitHub lewat pembaru server. Hasil: versi terpasang, versi terbaru, ada update atau tidak.", obj(json!({}), &[])),
+        t("install_update", Code, Approve, "Pasang rilis panel terbaru dari GitHub (hash dicek, database dicadangkan, rollback otomatis bila gagal). Panel restart ±1 menit.", obj(json!({}), &[])),
         t("rollback_code", Code, Free, "Kembali ke build terpasang sebelumnya.", obj(json!({"release_id": s("ID rilis, kosong = sebelumnya")}), &[])),
     ]
 }
