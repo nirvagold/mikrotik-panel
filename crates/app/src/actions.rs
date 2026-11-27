@@ -547,6 +547,11 @@ pub async fn fill_context(st: &Shared, a: &Action) -> FillContext {
     ctx
 }
 
+/// Profil User Manager saja (untuk ganti paket pelanggan).
+pub async fn um_profiles(st: &Shared) -> R<Vec<String>> {
+    Ok(print(st, "/user-manager/profile", &[], &["name"]).await?.into_iter().filter_map(|r| r.get("name").cloned()).collect())
+}
+
 pub async fn profiles(st: &Shared) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for path in ["/user-manager/profile", "/ppp/profile"] {

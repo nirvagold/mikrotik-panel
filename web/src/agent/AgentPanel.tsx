@@ -119,8 +119,16 @@ export function AgentPanel() {
   // Tombol agen di menu bawah HP membuka/menutup popup.
   useEffect(() => {
     const toggle = () => { setOpen(o => !o); requestAnimationFrame(() => input.current?.focus()); };
+    // Halaman lain bisa membuka agen dengan pesan yang sudah terisi (admin tinggal menekan Kirim).
+    const prefill = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail;
+      setOpen(true);
+      if (typeof text === 'string') updateDraft(text);
+      requestAnimationFrame(() => input.current?.focus());
+    };
     window.addEventListener('agent:toggle', toggle);
-    return () => window.removeEventListener('agent:toggle', toggle);
+    window.addEventListener('agent:prefill', prefill);
+    return () => { window.removeEventListener('agent:toggle', toggle); window.removeEventListener('agent:prefill', prefill); };
   }, []);
   useEffect(() => { storage('agent-conversation', conversation ?? ''); }, [conversation]);
   useEffect(() => {

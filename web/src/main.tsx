@@ -230,7 +230,7 @@ function Shell() {
   const page = pages.find(p => p.id === id) ?? pages.find(p => p.id === spec?.nav.items[0]?.page) ?? pages[0];
   const refresh = async () => {
     setRefreshing(true);
-    try { await post('/api/router/refresh'); await refreshDashboard(); } catch (e) { routerStatus.value = { ok: false, error: (e as Error).message }; } finally { setRefreshing(false); }
+    try { await post('/api/router/refresh'); routerStatus.value = { ok: true }; await refreshDashboard(); } catch (e) { routerStatus.value = { ok: false, hint: (e as Error).message }; } finally { setRefreshing(false); }
   };
   useEffect(() => { document.title = page ? `${page.title} · Panel MikroTik` : 'Panel MikroTik'; }, [page?.title]);
   const r = dashboard.value?.resources ?? {};
@@ -256,7 +256,7 @@ function Shell() {
             <h1 class="topbar-title">{page?.title ?? 'Panel MikroTik'}</h1>
             <span class="crumb">{r['board-name'] ? `/ ${r['board-name']}${r.version ? ` · RouterOS ${String(r.version).split(' ')[0]}` : ''}` : ''}</span>
             <span class="spacer" />
-            <span class={`pill ${ok ? 'ok' : 'bad'}`} title={ok ? undefined : routerStatus.value.error}>
+            <span class={`pill ${ok ? 'ok' : 'bad'}`} title={ok ? undefined : routerStatus.value.hint ?? routerStatus.value.error}>
               router <b>● {ok ? 'terhubung' : 'terputus'}</b> {ok ? ago(dashboard.value?.sampled_at) : ''}
             </span>
             {r['cpu-load'] != null && <span class="pill hide-sm">CPU {r['cpu-load']}% · RAM {ram}</span>}
@@ -265,6 +265,7 @@ function Shell() {
           </header>
           <main class="content">
             <ConnectionBanner />
+            {!ok && <div class="banner bad" role="alert"><b>Router tidak terhubung.</b> {routerStatus.value.hint ?? routerStatus.value.error ?? ''} <button type="button" class="link-btn" onClick={refresh} disabled={refreshing}>{refreshing ? 'Mencoba…' : 'Coba lagi'}</button></div>}
             {emergency && <p class="alert">Mode darurat: desain bawaan ditampilkan dan agen dimatikan. <a href="/" onClick={e => { e.preventDefault(); location.assign('/'); }}>Kembali ke desain biasa</a></p>}
             {page ? <DesignPage page={page} renderers={renderers} /> : <p class="muted design-page">Memuat tampilan…</p>}
           </main>

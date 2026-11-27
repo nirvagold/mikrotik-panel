@@ -26,6 +26,10 @@ pub fn routes() -> Router<Shared> {
             post(quota_preview),
         )
         .route("/api/customers/{account}/quota/apply", post(quota_apply))
+        .route("/api/customers/{account}/disconnect", post(customer_disconnect))
+        .route("/api/customers/{account}/enabled", post(customer_enabled))
+        .route("/api/customers/{account}/profile", post(customer_profile))
+        .route("/api/profiles", get(profiles))
         .route("/api/router", get(router_info))
         .route("/api/router/refresh", post(refresh))
         .route("/api/audit", get(audit))
@@ -222,22 +226,33 @@ async fn router_info(State(state): State<Shared>) -> Response {
 async fn refresh(State(state): State<Shared>) -> Response {
     match poller::sync_once(&state).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => fail(
-            StatusCode::BAD_GATEWAY,
-            format!("MikroTik belum merespons: {e}"),
-        ),
+        Err(e) => {
+            let hint = poller::hint_of(&e);
+            state.hub.publish("router.status", json!({ "ok": false, "error": e.to_string(), "hint": hint }));
+            fail(StatusCode::BAD_GATEWAY, hint)
+        }
     }
 }
 
-async fn audit(State(state): State<Shared>) -> Response {
+#[derive(Deserialize)]
+struct AuditQuery {
+    account: Option<String>,
+    /// Ambil yang lebih lama dari waktu ini (untuk "Muat lebih banyak").
+    before: Option<i64>,
+}
+
+async fn audit(State(state): State<Shared>, Query(q): Query<AuditQuery>) -> Response {
+    let account = q.account.filter(|a| !a.trim().is_empty());
+    let before = q.before.unwrap_or(i64::MAX);
     let rows = state
         .store
-        .run(|c| {
+        .run(move |c| {
             let mut s = c.prepare(
-                "SELECT id, at, actor, account, action, before, after, status FROM audit ORDER BY at DESC LIMIT 100",
+                "SELECT id, at, actor, account, action, before, after, status FROM audit
+                 WHERE at < ?1 AND (?2 IS NULL OR account = ?2) ORDER BY at DESC LIMIT 100",
             )?;
             let v = s
-                .query_map([], |r| {
+                .query_map((before, account), |r| {
                     Ok(json!({
                         "id": r.get::<_, String>(0)?, "at": r.get::<_, i64>(1)?, "actor": r.get::<_, String>(2)?,
                         "account": r.get::<_, Option<String>>(3)?, "action": r.get::<_, String>(4)?,
@@ -307,5 +322,87 @@ async fn actions(State(state): State<Shared>) -> Response {
     match rows {
         Ok(v) => Json(json!({ "actions": v })).into_response(),
         Err(e) => internal(e),
+    }
+}
+
+// ---------- Aksi langsung di detail pelanggan ----------
+
+/// Jalankan aksi pelanggan sekali (tidak bisa bersamaan untuk akun yang sama), catat di riwayat,
+/// lalu sinkronkan ulang supaya tabel langsung menampilkan keadaan baru.
+async fn customer_action<F, Fut>(state: Shared, account: String, action: &'static str, after: String, f: F) -> Response
+where
+    F: FnOnce(Shared, String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    let Some(_busy) = crate::inflight::claim(format!("customer:{account}")) else {
+        return fail(StatusCode::CONFLICT, "Aksi lain untuk pelanggan ini masih berjalan. Tunggu sebentar.");
+    };
+    let result = f(state.clone(), account.clone()).await;
+    let (ok, msg) = match &result {
+        Ok(m) => (true, m.clone()),
+        Err(m) => (false, m.clone()),
+    };
+    let (id, at, acc, m2) = (panel_core::crypto::random_token(), crate::store::now(), account.clone(), msg.clone());
+    let status = if ok { "Berhasil" } else { "Gagal" };
+    let _ = state
+        .store
+        .run(move |c| {
+            c.execute(
+                "INSERT INTO audit (id, at, actor, account, action, before, after, status) VALUES (?1, ?2, 'admin', ?3, ?4, NULL, ?5, ?6)",
+                (id, at, acc, action, format!("{after}: {m2}"), status),
+            )
+        })
+        .await;
+    if ok {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let _ = poller::sync_once(&st).await;
+        });
+        Json(json!({ "ok": true, "message": msg })).into_response()
+    } else {
+        fail(StatusCode::BAD_GATEWAY, msg)
+    }
+}
+
+async fn customer_disconnect(State(state): State<Shared>, Path(account): Path<String>) -> Response {
+    customer_action(state, account, "customer.disconnect", "putus sesi".into(), |st, a| async move {
+        crate::actions::disconnect(&st, &a).await
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn customer_enabled(State(state): State<Shared>, Path(account): Path<String>, Json(b): Json<EnabledBody>) -> Response {
+    let label = if b.enabled { "aktifkan" } else { "nonaktifkan" };
+    customer_action(state, account, "customer.enabled", label.into(), move |st, a| async move {
+        crate::actions::set_enabled(&st, &a, b.enabled).await
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct ProfileBody {
+    profile: String,
+}
+
+async fn customer_profile(State(state): State<Shared>, Path(account): Path<String>, Json(b): Json<ProfileBody>) -> Response {
+    let profile = b.profile.trim().to_string();
+    if profile.is_empty() {
+        return fail(StatusCode::BAD_REQUEST, "Pilih profil baru dulu.");
+    }
+    customer_action(state, account, "customer.profile", format!("ganti profil ke {profile}"), move |st, a| async move {
+        crate::actions::set_profile(&st, &a, &profile).await
+    })
+    .await
+}
+
+async fn profiles(State(state): State<Shared>) -> Response {
+    match crate::actions::um_profiles(&state).await {
+        Ok(list) => Json(json!({ "profiles": list })).into_response(),
+        Err(m) => fail(StatusCode::BAD_GATEWAY, m),
     }
 }

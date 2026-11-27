@@ -33,6 +33,25 @@ pub enum RouterError {
     Protocol,
 }
 
+impl RouterError {
+    /// Penjelasan untuk admin: apa artinya dan apa yang bisa dilakukan.
+    pub fn hint(&self) -> String {
+        match self {
+            RouterError::Io(e) => match e.kind() {
+                std::io::ErrorKind::ConnectionRefused => "Router menolak sambungan ke port API. Pastikan layanan api (8728) atau api-ssl (8729) aktif di IP > Services, dan IP server panel termasuk di Available From.".into(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => "Sambungan ke router terputus di tengah jalan. Biasanya karena router reboot atau jaringan putus sesaat; panel mencoba lagi otomatis.".into(),
+                _ => format!("Panel tidak bisa menyambung ke router ({e}). Periksa jaringan antara server panel dan router."),
+            },
+            RouterError::Timeout => "Router tidak menjawab tepat waktu. Periksa apakah router menyala, jaringan ke router, atau firewall yang memblokir port API.".into(),
+            RouterError::Login(_) => "Router menolak login panel. Periksa user dan kata sandi router di konfigurasi panel, serta grup user itu punya izin api.".into(),
+            RouterError::Trap(m) => format!("Router menolak perintah: {m}."),
+            RouterError::Fatal(_) => "Router memutus sesi API panel. Coba lagi; bila terus terjadi, cek log router.".into(),
+            RouterError::Invalid(m) => format!("Perintah tidak valid: {m}."),
+            RouterError::Protocol => "Jawaban router tidak bisa dibaca. Pastikan port yang dipakai adalah port API RouterOS, bukan Winbox atau web.".into(),
+        }
+    }
+}
+
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 

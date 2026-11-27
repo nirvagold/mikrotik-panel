@@ -27,6 +27,13 @@ pub async fn sync_once(state: &Shared) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Penjelasan ramah untuk kegagalan sinkronisasi (bila penyebabnya error router).
+pub fn hint_of(e: &anyhow::Error) -> String {
+    e.downcast_ref::<crate::routeros::RouterError>()
+        .map(|r| r.hint())
+        .unwrap_or_else(|| "Sinkronisasi dengan router gagal. Coba lagi sebentar lagi.".into())
+}
+
 pub fn spawn(state: Shared) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(state.config.router.poll_seconds));
@@ -48,7 +55,7 @@ pub fn spawn(state: Shared) {
                     failing = true;
                     state.hub.publish(
                         "router.status",
-                        json!({ "ok": false, "error": e.to_string() }),
+                        json!({ "ok": false, "error": e.to_string(), "hint": hint_of(&e) }),
                     );
                 }
             }
