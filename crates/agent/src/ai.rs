@@ -178,6 +178,12 @@ fn http_client(pin: Option<(&str, &[SocketAddr])>) -> Result<reqwest::Client, Ai
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
+        // Koneksi dipakai ulang antar-langkah agen: tanpa ini tiap langkah membayar
+        // DNS + TCP + TLS lagi (ratusan ms dari VPS ke penyedia AI).
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(2)
+        .tcp_keepalive(Duration::from_secs(30))
+        .tcp_nodelay(true)
         .user_agent("mikrotik-panel-agent");
     if let Some((host, addrs)) = pin {
         builder = builder.resolve_to_addrs(host, addrs);
@@ -216,6 +222,17 @@ pub fn build_body(endpoint: &Endpoint, first_party: bool, system: &str, messages
                     Part::Opaque { block } => block.clone(),
                 }).collect::<Vec<_>>(),
             })).collect();
+            let mut msgs = msgs;
+            if first_party {
+                // Breakpoint ketiga di ujung percakapan: langkah agen berikutnya (setelah hasil alat)
+                // hanya memproses bagian baru, bukan seluruh riwayat lagi. Blok thinking tidak bisa
+                // diberi cache_control, jadi pilih blok terakhir yang bisa.
+                if let Some(block) = msgs.last_mut().and_then(|m| m["content"].as_array_mut()).and_then(|c| {
+                    c.iter_mut().rev().find(|b| matches!(b["type"].as_str(), Some("text" | "tool_result" | "tool_use")))
+                }) {
+                    block["cache_control"] = json!({"type": "ephemeral"});
+                }
+            }
             let mut body = json!({"model": endpoint.model, "max_tokens": max_tokens, "stream": true,
                 "system": [system_block], "messages": msgs});
             if !tool_defs.is_empty() {
@@ -299,10 +316,41 @@ pub async fn stream_turn(
         let body = build_body(endpoint, false, system, messages, tools, DEFAULT_MAX_TOKENS);
         return send_with_fallback(&http_client(None)?, &url, endpoint, body, cancel, &mut on_event).await;
     }
-    let (url, host, addrs) = check_endpoint(&endpoint.base_url).await?;
-    let client = http_client(Some((&host, &addrs)))?;
+    let (url, client) = pooled_client(&endpoint.base_url).await?;
     let body = build_body(endpoint, is_first_party(&url), system, messages, tools, DEFAULT_MAX_TOKENS);
     send_with_fallback(&client, &url, endpoint, body, cancel, &mut on_event).await
+}
+
+/// Klien HTTP yang dipakai ulang (koneksi keep-alive) selama endpoint dan hasil DNS-nya sama.
+struct PooledClient {
+    base_url: String,
+    url: url::Url,
+    host: String,
+    addrs: Vec<SocketAddr>,
+    client: reqwest::Client,
+    checked: std::time::Instant,
+}
+
+static POOL: std::sync::Mutex<Option<PooledClient>> = std::sync::Mutex::new(None);
+/// DNS dicek ulang (dan alamat publik divalidasi lagi) paling lama tiap selang ini.
+const RECHECK_DNS: Duration = Duration::from_secs(300);
+
+async fn pooled_client(base_url: &str) -> Result<(url::Url, reqwest::Client), AiError> {
+    if let Ok(pool) = POOL.lock()
+        && let Some(p) = pool.as_ref().filter(|p| p.base_url == base_url && p.checked.elapsed() < RECHECK_DNS)
+    {
+        return Ok((p.url.clone(), p.client.clone()));
+    }
+    let (url, host, mut addrs) = check_endpoint(base_url).await?;
+    addrs.sort();
+    let mut pool = POOL.lock().map_err(|_| AiError::Endpoint("Gagal menyiapkan klien HTTP.".into()))?;
+    if let Some(p) = pool.as_mut().filter(|p| p.base_url == base_url && p.host == host && p.addrs == addrs) {
+        p.checked = std::time::Instant::now();
+        return Ok((p.url.clone(), p.client.clone()));
+    }
+    let client = http_client(Some((&host, &addrs)))?;
+    *pool = Some(PooledClient { base_url: base_url.to_string(), url: url.clone(), host, addrs, client: client.clone(), checked: std::time::Instant::now() });
+    Ok((url, client))
 }
 
 /// Model yang ditawarkan endpoint (untuk tombol "Ambil model" di Pengaturan AI).
@@ -535,11 +583,12 @@ struct Accumulator {
     // OpenAI: tool call per index
     oa_text: String,
     oa_tools: Vec<(usize, String, String, String)>,
+    oa_thinking: bool,
 }
 
 impl Accumulator {
     fn new(protocol: Protocol) -> Self {
-        Self { protocol, blocks: Vec::new(), stop: None, oa_text: String::new(), oa_tools: Vec::new() }
+        Self { protocol, blocks: Vec::new(), stop: None, oa_text: String::new(), oa_tools: Vec::new(), oa_thinking: false }
     }
 
     fn block(&mut self, index: usize) -> Option<&mut Block> {
@@ -625,6 +674,14 @@ impl Accumulator {
         }
         let Some(choice) = ev["choices"].get(0) else { return Ok(false) };
         let delta = &choice["delta"];
+        // Model penalaran (DeepSeek, OpenRouter, Qwen, dll.) mengirim proses berpikir di field
+        // terpisah; cukup jadi indikator "Berpikir…" supaya admin tahu agen tidak macet.
+        if !self.oa_thinking
+            && ["reasoning_content", "reasoning"].iter().any(|k| delta[*k].as_str().is_some_and(|t| !t.is_empty()))
+        {
+            self.oa_thinking = true;
+            on_event(Event::Thinking);
+        }
         if let Some(text) = delta["content"].as_str() {
             if !text.is_empty() {
                 self.oa_text.push_str(text);
@@ -873,6 +930,22 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn openai_reasoning_shows_thinking_once() {
+        let url = mock_server(concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" lagi\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Halo\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"), 200).await;
+        let mut ep = endpoint(Protocol::OpenAi);
+        ep.base_url = url.to_string();
+        let mut events = Vec::new();
+        let msgs = vec![Message { role: Role::User, parts: vec![Part::Text { text: "hai".into() }] }];
+        let reply = stream_turn(&ep, "sys", &msgs, &[], &CancellationToken::new(), |e| events.push(e)).await.unwrap();
+        assert_eq!(events, vec![Event::Thinking, Event::TextDelta("Halo".into())]);
+        assert_eq!(reply.parts, vec![Part::Text { text: "Halo".into() }]);
+    }
+
+    #[tokio::test]
     async fn openai_stream_with_tool() {
         let body = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"Oke\"}}]}\n\n",
@@ -924,8 +997,12 @@ pub(crate) mod tests {
         assert_eq!(a["tools"][1]["cache_control"]["type"], "ephemeral");
         assert_eq!(a["tools"][0]["eager_input_streaming"], true);
         assert_eq!(a["messages"][1]["content"][0]["signature"], "s");
+        // Ujung percakapan ikut di-cache (breakpoint ke-3), blok lain tidak.
+        assert_eq!(a["messages"][2]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert!(a["messages"][1]["content"][1].get("cache_control").is_none());
         let a3 = build_body(&endpoint(Protocol::Anthropic), false, "sys", &msgs, &tools, 1000);
         assert!(a3["tools"][0].get("eager_input_streaming").is_none());
+        assert!(a3["messages"][2]["content"][0].get("cache_control").is_none());
         let o = build_body(&endpoint(Protocol::OpenAi), false, "sys", &msgs, &tools, 1000);
         assert_eq!(o["messages"][2]["tool_calls"][0]["function"]["name"], "get_design");
         assert_eq!(o["messages"][3]["role"], "tool");

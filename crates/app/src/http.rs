@@ -312,7 +312,9 @@ async fn health(State(state): State<Shared>) -> Response {
 }
 
 async fn events(State(state): State<Shared>) -> impl IntoResponse {
-    state.hub.sse()
+    // nginx menahan (buffer) respons proxy secara bawaan; tanpa header ini potongan jawaban
+    // agen tiba bergerombol/terlambat bila panel dipasang di belakang nginx.
+    ([("x-accel-buffering", "no")], state.hub.sse())
 }
 
 #[cfg(test)]

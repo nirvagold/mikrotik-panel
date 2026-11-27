@@ -87,10 +87,16 @@ struct Turn<'a, H: Host> {
 
 /// Jalankan satu giliran admin sampai model selesai, dibatalkan, atau menunggu admin.
 pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, cancel: &CancellationToken) -> TurnOutcome {
-    let fail = |m: String| TurnOutcome { design_version: None, ended: Ended::Error(m) };
+    // Gagal sebelum mulai (mis. Pengaturan AI belum diisi) tetap mengirim chat.done supaya
+    // panel tidak menunggu selamanya di "Menghubungi AI…".
+    let fail = |m: String| {
+        host.publish("chat.done", json!({"conversation": conversation, "ended": "Error", "design_version": null, "error": m}));
+        TurnOutcome { design_version: None, ended: Ended::Error(m) }
+    };
     let endpoint = match host.endpoint().await { Ok(e) => e, Err(m) => return fail(m) };
     let (base_version, spec) = match host.draft_design().await { Ok((v, s)) => (v, s.normalized()), Err(m) => return fail(m) };
     let mut history = match host.load_messages(conversation).await { Ok(h) => h, Err(m) => return fail(m) };
+    compact_old_tool_results(&mut history);
 
     let memories = host.recall(user_text).await;
     let mut context = format!("[Konteks panel] Halaman dan blok draft: {}", outline(&spec));
@@ -108,7 +114,9 @@ pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, ca
     let mut turn = Turn { host, conversation, base_version, spec, design_changed: false, current_tool_use: String::new() };
     let mut ended = Ended::StepLimit;
 
-    'steps: for _ in 0..MAX_AGENT_STEPS {
+    'steps: for step in 0..MAX_AGENT_STEPS {
+        // Tanda ke UI bahwa permintaan ke AI sedang dikirim (indikator + penghitung waktu).
+        host.publish("chat.step", json!({"conversation": conversation, "step": step + 1}));
         let conv = conversation.to_string();
         let mut partial = String::new();
         let reply = ai::stream_turn(&endpoint, SYSTEM_PROMPT, &history, &catalog, cancel, |event| match event {
@@ -187,13 +195,34 @@ pub async fn run_turn<H: Host>(host: &H, conversation: &str, user_text: &str, ca
                 host.publish("design.version", json!({"id": version, "parent": turn.base_version, "source": "agent", "conversation": conversation}));
                 Some(version)
             }
-            Err(m) => return TurnOutcome { design_version: None, ended: Ended::Error(m) },
+            Err(m) => return fail(m),
         }
     } else {
         None
     };
-    host.publish("chat.done", json!({"conversation": conversation, "ended": format!("{ended:?}"), "design_version": design_version}));
+    let error = match &ended { Ended::Error(m) => Some(m.clone()), _ => None };
+    host.publish("chat.done", json!({"conversation": conversation, "ended": format!("{ended:?}"), "design_version": design_version, "error": error}));
     TurnOutcome { design_version, ended }
+}
+
+/// Batas hasil alat dari giliran admin sebelumnya yang dikirim ulang ke model.
+const OLD_TOOL_RESULT_MAX: usize = 1_500;
+
+/// Hasil alat dari giliran sebelumnya (data router, desain lengkap, log) dipadatkan sebelum
+/// dikirim ulang. Tanpa ini tiap pesan baru mengirim ulang puluhan KB data lama sehingga
+/// waktu sampai token pertama makin lama seiring percakapan. Data lengkap tetap tersimpan
+/// di database; model bisa memanggil alatnya lagi bila perlu nilai terbaru.
+fn compact_old_tool_results(history: &mut [Message]) {
+    for message in history.iter_mut().filter(|m| m.role == Role::User) {
+        for part in &mut message.parts {
+            if let Part::ToolResult { content, .. } = part
+                && content.len() > OLD_TOOL_RESULT_MAX
+            {
+                *content = format!("{} [hasil lama dipadatkan; panggil alatnya lagi bila perlu data lengkap/terbaru]",
+                    truncate(content, OLD_TOOL_RESULT_MAX));
+            }
+        }
+    }
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -462,5 +491,27 @@ mod tests {
         let outcome = run_turn(&host, "conv", "halo", &cancel).await;
         assert_eq!(outcome.ended, Ended::Cancelled);
         assert_eq!(outcome.design_version, None);
+    }
+
+    #[test]
+    fn old_tool_results_are_compacted() {
+        let big = "x".repeat(10_000);
+        let mut history = vec![
+            Message { role: Role::User, parts: vec![Part::Text { text: big.clone() }] },
+            Message { role: Role::User, parts: vec![
+                Part::ToolResult { tool_use_id: "a".into(), content: big.clone(), is_error: false },
+                Part::ToolResult { tool_use_id: "b".into(), content: "kecil".into(), is_error: false },
+            ] },
+        ];
+        compact_old_tool_results(&mut history);
+        // Teks admin tidak disentuh; hasil alat besar dipadatkan, yang kecil tetap.
+        assert_eq!(history[0].parts[0], Part::Text { text: big });
+        let Part::ToolResult { content, .. } = &history[1].parts[0] else { panic!() };
+        assert!(content.len() < 1_700 && content.contains("dipadatkan"));
+        assert_eq!(history[1].parts[1], Part::ToolResult { tool_use_id: "b".into(), content: "kecil".into(), is_error: false });
+        // Deterministik: hasil sama tiap giliran supaya prefix cache tetap cocok.
+        let mut again = vec![Message { role: Role::User, parts: vec![Part::ToolResult { tool_use_id: "a".into(), content: "x".repeat(10_000), is_error: false }] }];
+        compact_old_tool_results(&mut again);
+        assert_eq!(again[0], history[1].parts[..1].iter().cloned().map(|p| Message { role: Role::User, parts: vec![p] }).next().unwrap());
     }
 }

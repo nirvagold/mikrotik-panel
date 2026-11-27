@@ -1,6 +1,6 @@
 // Panel chat agen ala Claude. Dirender di Shadow DOM (lihat mount.tsx) supaya
 // CSS khusus buatan agen tidak bisa merusak panel ini atau tombol Terapkan/Reset.
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { get, post } from '../api';
 import { on } from '../events';
 import { keyIntent, parseSlash, SLASH_HELP } from './composer';
@@ -30,6 +30,11 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 type ToolChip = { name: string; status: 'started' | 'done' | 'error' };
+/** Apa yang sedang dikerjakan agen, untuk indikator + penghitung waktu (bukan diam "Menyiapkan…"). */
+type Phase = { kind: 'wait' | 'thinking' | 'writing' | 'tool'; since: number };
+const phaseNow = (kind: Phase['kind']): Phase => ({ kind, since: Date.now() });
+/** ID percakapan dibuat di browser supaya event SSE pertama tidak terlewat sebelum POST selesai. */
+const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 type Question = { question: string; options: string[] };
 
 function storage(key: string, value?: string): string {
@@ -59,7 +64,7 @@ export function AgentPanel() {
   const [proposals, setProposals] = useState<ProposalCard[]>([]);
   const [streaming, setStreaming] = useState('');
   const [tools, setTools] = useState<ToolChip[]>([]);
-  const [thinking, setThinking] = useState(false);
+  const [phase, setPhase] = useState<Phase>(() => phaseNow('wait'));
   const [runId, setRunId] = useState<string | null>(null);
   const [question, setQuestion] = useState<Question | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -71,19 +76,36 @@ export function AgentPanel() {
   const panel = useRef<HTMLElement>(null);
   const convRef = useRef(conversation);
   convRef.current = conversation;
+  // Potongan teks dari SSE dikumpulkan lalu dirender sekali per frame, bukan sekali per token.
+  const pendingDelta = useRef('');
+  const deltaFrame = useRef(0);
+  // 'sending' = POST belum kembali; chat.done bisa tiba lebih dulu bila agen langsung gagal.
+  const turnState = useRef<'idle' | 'sending' | 'running'>('idle');
+  const lastSent = useRef('');
   const running = runId !== null;
 
   async function loadConversations() {
     try { setConversations((await get<{ conversations: Conversation[] }>('/api/agent/conversations')).conversations); } catch { /* tampil kosong */ }
   }
-  async function loadMessages(id: string | null) {
+  async function loadMessages(id: string | null, afterDone = false) {
     if (!id) { setMessages([]); setProposals([]); return; }
     try {
       const result = await get<{ messages: ChatMessage[]; proposals: ProposalCard[]; run_id: string | null }>(`/api/agent/conversations/${encodeURIComponent(id)}/messages`);
+      if (id !== convRef.current) return;
       setMessages(result.messages);
       setProposals(result.proposals);
-      setRunId(result.run_id);
+      // Setelah chat.done server bisa masih menandai run aktif beberapa milidetik; jangan
+      // sampai panel macet di status "bekerja".
+      if (!afterDone) setRunId(result.run_id);
     } catch (e) { setProblem((e as Error).message); }
+  }
+
+  function flushDelta() {
+    deltaFrame.current = 0;
+    const text = pendingDelta.current;
+    if (!text) return;
+    pendingDelta.current = '';
+    setStreaming(s => s + text);
   }
 
   useEffect(() => { void loadConversations(); void loadMessages(conversation); }, []);
@@ -104,11 +126,17 @@ export function AgentPanel() {
   useEffect(() => {
     const mine = (d: { conversation?: string }) => d.conversation === convRef.current;
     const offs = [
-      on('chat.delta', (d: { conversation: string; text: string }) => { if (mine(d)) { setThinking(false); setStreaming(s => s + d.text); } }),
-      on('chat.thinking', (d: { conversation: string }) => { if (mine(d)) setThinking(true); }),
+      on('chat.step', (d: { conversation: string }) => { if (mine(d)) setPhase(phaseNow('wait')); }),
+      on('chat.delta', (d: { conversation: string; text: string }) => {
+        if (!mine(d)) return;
+        setPhase(p => p.kind === 'writing' ? p : phaseNow('writing'));
+        pendingDelta.current += d.text;
+        if (!deltaFrame.current) deltaFrame.current = requestAnimationFrame(flushDelta);
+      }),
+      on('chat.thinking', (d: { conversation: string }) => { if (mine(d)) setPhase(phaseNow('thinking')); }),
       on('chat.tool', (d: { conversation: string; name: string; status: ToolChip['status'] }) => {
         if (!mine(d)) return;
-        setThinking(false);
+        setPhase(phaseNow(d.status === 'started' ? 'tool' : 'wait'));
         setTools(list => {
           const i = list.findIndex(t => t.name === d.name && t.status === 'started');
           if (d.status === 'started' || i < 0) return [...list, { name: d.name, status: d.status }];
@@ -116,10 +144,20 @@ export function AgentPanel() {
         });
       }),
       on('chat.question', (d: { conversation: string } & Question) => { if (mine(d)) setQuestion({ question: d.question, options: d.options }); }),
-      on('chat.done', (d: { conversation: string }) => {
+      on('chat.done', async (d: { conversation: string; error?: string | null }) => {
         if (!mine(d)) return;
-        setRunId(null); setStreaming(''); setTools([]); setThinking(false);
-        void loadMessages(d.conversation); void loadConversations();
+        turnState.current = 'idle';
+        cancelAnimationFrame(deltaFrame.current); flushDelta();
+        if (d.error) {
+          setProblem(d.error);
+          // Pesan yang gagal diproses dikembalikan ke kolom ketik supaya mudah dikirim ulang.
+          if (!input.current?.value.trim()) updateDraft(lastSent.current);
+        }
+        // Jawaban yang sedang tampil dibiarkan sampai versi tersimpan selesai dimuat (tanpa kedip).
+        await loadMessages(d.conversation, true);
+        if (!mine(d)) return;
+        setRunId(null); setStreaming(''); setTools([]);
+        void loadConversations();
       }),
       on('proposal.updated', (d: { card: ProposalCard }) => {
         if (d.card.conversation_id !== convRef.current) return;
@@ -211,18 +249,39 @@ export function AgentPanel() {
   async function send(text: string, replaceFrom?: string) {
     const body = text.trim();
     if (!body || running) return;
-    setProblem(''); setQuestion(null); setStreaming(''); setTools([]);
+    // Tampilkan pesan admin dan kosongkan kolom ketik SEKETIKA (dulu baru muncul setelah agen selesai).
+    const id = conversation ?? newId();
+    const before = messages;
+    const cut = replaceFrom ? messages.findIndex(m => m.id === replaceFrom) : -1;
+    const mine: ChatMessage = { id: `local-${Date.now()}`, role: 'user', parts: [{ type: 'text', text: body }], design_version_id: null, created_at: Date.now() / 1000 };
+    convRef.current = id;
+    setConversation(id);
+    setMessages([...(cut >= 0 ? messages.slice(0, cut) : messages), mine]);
+    setProblem(''); setQuestion(null); setStreaming(''); setTools([]); setEditing(null);
+    pendingDelta.current = '';
+    setPhase(phaseNow('wait'));
+    setRunId('');
+    turnState.current = 'sending';
+    lastSent.current = body;
+    updateDraft('');
+    storage(`agent-draft:${id}`, '');
+    storage(`agent-draft:new`, '');
     try {
       const result = await post<{ conversation_id: string; run_id: string; messages: ChatMessage[] }>('/api/agent/messages', {
-        conversation_id: conversation, text: body, replace_from: replaceFrom ?? null,
+        conversation_id: id, text: body, replace_from: replaceFrom ?? null,
       });
-      setConversation(result.conversation_id);
-      setMessages(result.messages);
+      if (convRef.current !== result.conversation_id || turnState.current !== 'sending') return;
+      turnState.current = 'running';
+      // Server mengembalikan riwayat sebelum pesan ini disimpan; pertahankan pesan yang sudah tampil.
+      setMessages([...result.messages, mine]);
       setRunId(result.run_id);
-      setEditing(null);
-      updateDraft('');
-      storage(`agent-draft:new`, '');
-    } catch (e) { setProblem((e as Error).message); }
+    } catch (e) {
+      turnState.current = 'idle';
+      setMessages(before);
+      setRunId(null);
+      updateDraft(body);
+      setProblem((e as Error).message);
+    }
   }
 
   async function submit() {
@@ -294,6 +353,37 @@ export function AgentPanel() {
   };
   const orphanCards = proposals.filter(p => !messages.some(m => cardsFor(m).includes(p)));
 
+  // Riwayat tidak ikut dirender ulang tiap potongan teks yang mengalir.
+  const history = useMemo(() => <>
+        {visible.map((m, i) => {
+          const index = messages.indexOf(m);
+          if (m.role === 'user') {
+            return <article key={m.id} class={`msg user ${editing === m.id ? 'editing' : ''}`}>
+              <div class="bubble">{userText(m)}</div>
+              <div class="actions">
+                <button type="button" onClick={() => startEdit(m)} disabled={running}>Edit</button>
+                <button type="button" onClick={() => void navigator.clipboard?.writeText(userText(m))}>Salin</button>
+              </div>
+            </article>;
+          }
+          const text = textOf(m.parts);
+          const used = m.parts.filter(p => p.type === 'tool_use') as Extract<Part, { type: 'tool_use' }>[];
+          const lastOfTurn = !visible[i + 1] || visible[i + 1].role === 'user';
+          return <article key={m.id} class="msg assistant">
+            {used.length > 0 && <ul class="chips">{used.map(t => <li key={t.id} class="chip done">{TOOL_LABELS[t.name] ?? t.name}</li>)}</ul>}
+            {text && <Markdown text={text} />}
+            {used.filter(t => t.name === 'show_card').map(t => <ShowCard key={`card-${t.id}`} input={t.input} />)}
+            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
+            {lastOfTurn && !running && <div class="actions">
+              {text && <button type="button" onClick={() => void navigator.clipboard?.writeText(text)}>Salin</button>}
+              <button type="button" onClick={() => regenerate(index)}>Ulangi</button>
+              {m.design_version_id && <button type="button" onClick={() => void revertHere(m)} title="Kembalikan desain seperti saat pesan ini">Kembalikan ke sini</button>}
+            </div>}
+          </article>;
+        })}
+        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
+  </>, [messages, proposals, typed, editing, running, conversation]);
+
   if (!open) {
     return <button class="launcher" type="button" onClick={() => { setOpen(true); requestAnimationFrame(() => input.current?.focus()); }} aria-label="Buka agen AI (Ctrl+K)">
       <span class="launcher-mark" aria-hidden="true">✦</span><span class="launcher-text">Agen AI</span>{running && <i class="pulse" aria-label="sedang bekerja" />}
@@ -336,38 +426,14 @@ export function AgentPanel() {
               <button key={s} type="button" class="suggest" onClick={() => { updateDraft(s); input.current?.focus(); }}>{s}</button>)}
           </div>
         )}
-        {visible.map((m, i) => {
-          const index = messages.indexOf(m);
-          if (m.role === 'user') {
-            return <article key={m.id} class={`msg user ${editing === m.id ? 'editing' : ''}`}>
-              <div class="bubble">{userText(m)}</div>
-              <div class="actions">
-                <button type="button" onClick={() => startEdit(m)} disabled={running}>Edit</button>
-                <button type="button" onClick={() => void navigator.clipboard?.writeText(userText(m))}>Salin</button>
-              </div>
-            </article>;
-          }
-          const text = textOf(m.parts);
-          const used = m.parts.filter(p => p.type === 'tool_use') as Extract<Part, { type: 'tool_use' }>[];
-          const lastOfTurn = !visible[i + 1] || visible[i + 1].role === 'user';
-          return <article key={m.id} class="msg assistant">
-            {used.length > 0 && <ul class="chips">{used.map(t => <li key={t.id} class="chip done">{TOOL_LABELS[t.name] ?? t.name}</li>)}</ul>}
-            {text && <Markdown text={text} />}
-            {used.filter(t => t.name === 'show_card').map(t => <ShowCard key={`card-${t.id}`} input={t.input} />)}
-            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
-            {lastOfTurn && !running && <div class="actions">
-              {text && <button type="button" onClick={() => void navigator.clipboard?.writeText(text)}>Salin</button>}
-              <button type="button" onClick={() => regenerate(index)}>Ulangi</button>
-              {m.design_version_id && <button type="button" onClick={() => void revertHere(m)} title="Kembalikan desain seperti saat pesan ini">Kembalikan ke sini</button>}
-            </div>}
-          </article>;
-        })}
-        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
+        {history}
         {running && (
           <article class="msg assistant live">
             {tools.length > 0 && <ul class="chips">{tools.map((t, i) => <li key={i} class={`chip ${t.status}`}>{TOOL_LABELS[t.name] ?? t.name}{t.status === 'started' ? '…' : t.status === 'error' ? ' ✕' : ' ✓'}</li>)}</ul>}
-            {streaming ? <Markdown text={streaming} /> : <p class="muted">{thinking ? 'Berpikir…' : 'Menyiapkan…'}</p>}
-            <span class="caret" aria-hidden="true" />
+            {streaming && <Markdown text={streaming} />}
+            {phase.kind === 'writing'
+              ? <span class="caret" aria-hidden="true" />
+              : <p class="muted status">{phaseLabel(phase.kind, tools.length > 0 || !!streaming)}<Elapsed since={phase.since} /></p>}
           </article>
         )}
         {question && !running && (
@@ -391,6 +457,20 @@ export function AgentPanel() {
       </form>
     </section>
   );
+}
+
+function phaseLabel(kind: Phase['kind'], afterWork: boolean) {
+  if (kind === 'thinking') return 'Berpikir…';
+  if (kind === 'tool') return 'Menjalankan alat…';
+  return afterWork ? 'Menyusun langkah berikutnya…' : 'Menghubungi AI…';
+}
+
+/** Detik berjalan; komponen sendiri supaya hanya baris ini yang dirender ulang tiap detik. */
+function Elapsed({ since }: { since: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick(n => n + 1), 1000); return () => clearInterval(t); }, [since]);
+  const s = Math.floor((Date.now() - since) / 1000);
+  return s >= 2 ? <span class="elapsed"> {s} dtk</span> : null;
 }
 
 function Card({ card, typed, onType, onDecide, onRevert }: { card: ProposalCard; typed: string; onType: (v: string) => void; onDecide: (c: ProposalCard, ok: boolean) => void; onRevert: (c: ProposalCard) => void }) {
