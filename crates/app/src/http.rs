@@ -43,6 +43,7 @@ pub fn app(state: Shared) -> Router {
         .route("/api/session", get(session_info))
         .route("/api/version", get(version_info))
         .route("/api/update/request", post(update_request))
+        .route("/api/update/notes", get(update_notes))
         .route("/api/events", get(events))
         .merge(crate::api::routes())
         .merge(crate::agent_api::routes())
@@ -169,7 +170,23 @@ async fn login(
         return error(StatusCode::UNAUTHORIZED, "Kata sandi salah.");
     }
     state.limiter.succeeded(ip);
-    let (token, csrf) = state.sessions.create();
+    let session = state.sessions.create_new();
+    let (hash, csrf_db, expires) = (session.hash.clone(), session.csrf.clone(), session.expires as i64);
+    // Disimpan supaya admin tidak keluar sendiri saat panel di-update atau restart.
+    if let Err(e) = state
+        .store
+        .run(move |c| {
+            c.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [crate::store::now()])?;
+            c.execute(
+                "INSERT OR REPLACE INTO admin_sessions (token_hash, csrf, expires_at) VALUES (?1, ?2, ?3)",
+                (hash, csrf_db, expires),
+            )
+        })
+        .await
+    {
+        tracing::warn!("sesi tidak tersimpan ke database: {e}");
+    }
+    let (token, csrf) = (session.token, session.csrf);
     let secure = if state.config.cookie_secure {
         "; Secure"
     } else {
@@ -190,6 +207,11 @@ async fn login(
 async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Response {
     if let Some(token) = cookie_value(&headers, SESSION_COOKIE) {
         state.sessions.remove(&token);
+        let hash = auth::token_hash(&token);
+        let _ = state
+            .store
+            .run(move |c| c.execute("DELETE FROM admin_sessions WHERE token_hash = ?1", [hash]))
+            .await;
     }
     let mut res = StatusCode::NO_CONTENT.into_response();
     res.headers_mut().insert(
@@ -279,6 +301,55 @@ pub async fn request_update(action: &str) -> Result<(), (StatusCode, String)> {
 }
 
 /// Isi status.json pembaru, atau None bila pembaru belum terpasang.
+#[derive(Deserialize)]
+struct NotesQuery {
+    tag: String,
+}
+
+/// Catatan rilis dari GitHub untuk satu tag (disimpan sementara di memori).
+async fn update_notes(axum::extract::Query(q): axum::extract::Query<NotesQuery>) -> Response {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    let tag = q.tag.trim().to_string();
+    if tag.is_empty() || tag.len() > 32 || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+        return error(StatusCode::BAD_REQUEST, "Tag rilis tidak valid.");
+    }
+    if let Some(text) = CACHE.lock().unwrap().as_ref().and_then(|c| c.get(&tag).cloned()) {
+        return Json(json!({ "tag": tag, "notes": text })).into_response();
+    }
+    let url = format!("https://api.github.com/repos/{RELEASE_REPO}/releases/tags/{tag}");
+    let fetched = async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("mikrotik-panel")
+            .build()?;
+        let v: serde_json::Value = client
+            .get(&url)
+            .header("accept", "application/vnd.github+json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok::<_, reqwest::Error>(v["body"].as_str().unwrap_or("").chars().take(4000).collect::<String>())
+    }
+    .await;
+    match fetched {
+        Ok(text) => {
+            CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(tag.clone(), text.clone());
+            Json(json!({ "tag": tag, "notes": text })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("catatan rilis {tag} gagal dibaca: {e}");
+            error(StatusCode::BAD_GATEWAY, "Catatan rilis belum bisa dibaca dari GitHub.")
+        }
+    }
+}
+
+/// Repo rilis (sama dengan REPO di deploy/update.sh).
+const RELEASE_REPO: &str = "nirvagold/mikrotik-panel";
+
 pub async fn read_update_status() -> Option<serde_json::Value> {
     let path = std::env::var("PANEL_UPDATE_STATUS").unwrap_or_else(|_| UPDATE_STATUS.into());
     tokio::fs::read_to_string(path)
@@ -307,7 +378,10 @@ async fn health(State(state): State<Shared>) -> Response {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    let body = json!({ "ok": db_ok, "version": crate::VERSION, "database": { "ok": db_ok }, "router": router });
+    // "busy": ada top-up, jawaban agen, atau perintah yang sedang berjalan. Pembaru menunggu
+    // sampai false sebelum me-restart panel, supaya pekerjaan admin tidak terputus.
+    let busy = crate::inflight::any() || state.quota.busy() || state.runs.current_conversation().is_some();
+    let body = json!({ "ok": db_ok, "version": crate::VERSION, "busy": busy, "database": { "ok": db_ok }, "router": router });
     (status, Json(body)).into_response()
 }
 

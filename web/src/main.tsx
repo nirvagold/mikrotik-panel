@@ -5,11 +5,11 @@ import './app.css';
 import { DesignPage, liveSpec, mountAgentPanel, startDesign, type BlockRenderers } from './agent';
 import { applyDesign } from './agent/design-runtime';
 import type { DesignSpec } from './agent/types';
-import { authed, checkSession, get, login, logout, post } from './api';
+import { authed, checkSession, get, login, logout, post, sessionEnded, sessionStillValid } from './api';
 import { ActionButton, CustomerTable, Logs, LowQuota, Metrics, Recommendations, RouterStatus, Topology, TrafficChart } from './blocks';
 import { Builtin } from './builtins';
 import { dashboard, refreshDashboard, routerStatus, startData } from './data';
-import { connect } from './events';
+import { connect, connection, on, onConnectionLost } from './events';
 import { ago } from './format';
 import { navigate, path } from './router';
 
@@ -76,6 +76,7 @@ function Login() {
       <form class="login-card stack" onSubmit={submit}>
         <div class="login-brand"><span class="brand-mark" aria-hidden="true">M</span><h1>Panel MikroTik</h1></div>
         <label>Kata sandi admin<input type="password" autocomplete="current-password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autofocus /></label>
+        {sessionEnded.value && !error && <p class="notice" role="status">Sesi berakhir, silakan masuk lagi. Kamu akan kembali ke halaman yang tadi dibuka.</p>}
         <button type="submit" disabled={busy}>{busy ? 'Memeriksa…' : 'Masuk'}</button>
         {error && <p class="alert" role="alert">{error}</p>}
       </form>
@@ -99,6 +100,7 @@ function VersionPill() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'' | 'check' | 'install'>('');
   const [msg, setMsg] = useState('');
+  const [notes, setNotes] = useState<string | null>(null);
   const box = useRef<HTMLSpanElement>(null);
   const load = () => get<VersionInfo>('/api/version').then(v => { setInfo(v); return v; });
   useEffect(() => {
@@ -113,6 +115,12 @@ function VersionPill() {
     document.addEventListener('keydown', close);
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close); };
   }, [open]);
+  const latestTag = info?.update?.latest;
+  useEffect(() => {
+    if (!open || !latestTag) return;
+    setNotes(null);
+    get<{ notes: string }>(`/api/update/notes?tag=${encodeURIComponent(latestTag)}`).then(r => setNotes(r.notes.trim() || null)).catch(() => setNotes(null));
+  }, [open, latestTag]);
   if (!info) return null;
   const u = info.update;
   const latest = u?.latest?.replace(/^v/, '');
@@ -168,6 +176,7 @@ function VersionPill() {
               {u.last_tag && <><dt>Update terakhir</dt><dd>{u.last_tag} {u.last_result === 'ok' ? 'berhasil' : 'gagal, dikembalikan'} · {when(u.last_at)}</dd></>}
             </dl>
           )}
+          {notes && <details class="update-notes" open={behind}><summary>Apa yang baru di {u?.latest}</summary><p class="small">{notes}</p></details>}
           {u && !u.on_demand && <p class="muted small">Tombol aktif setelah pembaru di server memperbarui dirinya (update otomatis berikutnya).</p>}
           {msg && <p class="update-msg" role="status">{msg}</p>}
           <div class="update-actions">
@@ -180,10 +189,30 @@ function VersionPill() {
   );
 }
 
+/** Banner koneksi: panel sedang restart, atau sudah diperbarui ke versi baru. */
+function ConnectionBanner() {
+  const [down, setDown] = useState(connection.down);
+  const [newVersion, setNewVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let loaded: string | null = null;
+    get<{ version: string }>('/api/version').then(v => { loaded = v.version; }).catch(() => {});
+    const offs = [
+      on('connection', (d: { down: boolean }) => setDown(d.down)),
+      // Tersambung lagi setelah putus: bila versi server berubah, tawarkan muat ulang.
+      on('resync', () => void get<{ version: string }>('/api/version').then(v => { if (loaded && v.version !== loaded) setNewVersion(v.version); }).catch(() => {})),
+    ];
+    return () => offs.forEach(off => off());
+  }, []);
+  if (newVersion) return <p class="banner ok" role="status">Panel sudah diperbarui ke v{newVersion}. <button type="button" class="link-btn" onClick={() => location.reload()}>Muat ulang</button> untuk memakai versi terbaru.</p>;
+  if (down) return <p class="banner warn" role="status">Panel sedang tidak terjangkau (mungkin sedang dinyalakan ulang). Menyambung lagi otomatis…</p>;
+  return null;
+}
+
 function Shell() {
   const root = useRef<HTMLDivElement>(null);
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
+    onConnectionLost(sessionStillValid);
     connect();
     startData();
     if (emergency) {
@@ -235,6 +264,7 @@ function Shell() {
             <button type="button" class="pill-btn" onClick={refresh} disabled={refreshing} title="Ambil data terbaru dari router">{refreshing ? '…' : '↻'} <span class="hide-sm">Perbarui</span></button>
           </header>
           <main class="content">
+            <ConnectionBanner />
             {emergency && <p class="alert">Mode darurat: desain bawaan ditampilkan dan agen dimatikan. <a href="/" onClick={e => { e.preventDefault(); location.assign('/'); }}>Kembali ke desain biasa</a></p>}
             {page ? <DesignPage page={page} renderers={renderers} /> : <p class="muted design-page">Memuat tampilan…</p>}
           </main>

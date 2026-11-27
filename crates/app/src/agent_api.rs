@@ -505,6 +505,7 @@ async fn approve(
         );
     }
     // Klaim atomik: ketukan dobel atau dua perangkat tidak bisa menjalankan usulan yang sama dua kali.
+    let _busy = crate::inflight::claim(format!("approve:{id}"));
     match claim_pending(&st, &id, "approved").await {
         Ok(true) => {}
         Ok(false) => return fail(StatusCode::CONFLICT, "Usulan ini sudah diproses."),

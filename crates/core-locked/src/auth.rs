@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use subtle::ConstantTimeEq;
 
@@ -15,10 +15,34 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 #[derive(Clone, Debug)]
 pub struct Session {
     pub csrf: String,
-    pub expires: Instant,
+    /// Detik Unix saat sesi berakhir (bertahan saat panel restart bila disimpan ke database).
+    pub expires: u64,
 }
 
-/// Sesi disimpan di memori: restart panel = login ulang. Ringan dan tanpa tabel.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Sidik token sesi: yang disimpan di memori dan database hanya hash, bukan token cookie-nya.
+pub fn token_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Sesi baru yang perlu disimpan pemanggil.
+pub struct NewSession {
+    pub token: String,
+    pub csrf: String,
+    pub hash: String,
+    pub expires: u64,
+}
+
 pub struct Sessions {
     ttl: Duration,
     inner: Mutex<HashMap<String, Session>>,
@@ -32,29 +56,51 @@ impl Sessions {
         }
     }
 
-    /// Membuat sesi baru, mengembalikan (token sesi, token CSRF).
     pub fn create(&self) -> (String, String) {
+        let s = self.create_new();
+        (s.token, s.csrf)
+    }
+
+    pub fn create_new(&self) -> NewSession {
         let token = random_token();
         let csrf = random_token();
+        let hash = token_hash(&token);
+        let now = unix_now();
+        let expires = now + self.ttl.as_secs();
         let mut map = self.inner.lock().unwrap();
-        let now = Instant::now();
         map.retain(|_, s| s.expires > now);
         map.insert(
-            token.clone(),
+            hash.clone(),
             Session {
                 csrf: csrf.clone(),
-                expires: now + self.ttl,
+                expires,
             },
         );
-        (token, csrf)
+        NewSession {
+            token,
+            csrf,
+            hash,
+            expires,
+        }
+    }
+
+    /// Pulihkan sesi dari database saat panel menyala.
+    pub fn restore(&self, hash: String, csrf: String, expires: u64) {
+        if expires > unix_now() {
+            self.inner
+                .lock()
+                .unwrap()
+                .insert(hash, Session { csrf, expires });
+        }
     }
 
     pub fn get(&self, token: &str) -> Option<Session> {
+        let hash = token_hash(token);
         let mut map = self.inner.lock().unwrap();
-        match map.get(token) {
-            Some(s) if s.expires > Instant::now() => Some(s.clone()),
+        match map.get(&hash) {
+            Some(s) if s.expires > unix_now() => Some(s.clone()),
             Some(_) => {
-                map.remove(token);
+                map.remove(&hash);
                 None
             }
             None => None,
@@ -62,7 +108,7 @@ impl Sessions {
     }
 
     pub fn remove(&self, token: &str) {
-        self.inner.lock().unwrap().remove(token);
+        self.inner.lock().unwrap().remove(&token_hash(token));
     }
 
     pub fn ttl(&self) -> Duration {
@@ -152,11 +198,19 @@ mod tests {
 
     #[test]
     fn sessions_expire() {
-        let s = Sessions::new(Duration::from_millis(20));
-        let (t, csrf) = s.create();
-        assert_eq!(s.get(&t).unwrap().csrf, csrf);
-        std::thread::sleep(Duration::from_millis(30));
-        assert!(s.get(&t).is_none());
+        let s = Sessions::new(Duration::from_secs(60));
+        let n = s.create_new();
+        assert_eq!(s.get(&n.token).unwrap().csrf, n.csrf);
+        assert_eq!(n.hash, token_hash(&n.token));
+        // Sesi yang sudah lewat waktunya tidak dipulihkan dan tidak diterima.
+        let other = Sessions::new(Duration::from_secs(60));
+        other.restore(n.hash.clone(), n.csrf.clone(), 1);
+        assert!(other.get(&n.token).is_none());
+        // Sesi yang masih berlaku dipulihkan setelah "restart".
+        other.restore(n.hash, n.csrf.clone(), n.expires);
+        assert_eq!(other.get(&n.token).unwrap().csrf, n.csrf);
+        s.remove(&n.token);
+        assert!(s.get(&n.token).is_none());
     }
 
     #[test]

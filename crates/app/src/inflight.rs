@@ -20,6 +20,14 @@ pub fn claim(key: impl Into<String>) -> Option<Claim> {
     fresh.then(|| Claim(key))
 }
 
+/// Ada pekerjaan yang sedang berjalan (dipakai pembaru untuk menunda restart).
+pub fn any() -> bool {
+    BUSY.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|s| !s.is_empty())
+}
+
 impl Drop for Claim {
     fn drop(&mut self) {
         if let Some(set) = BUSY.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {

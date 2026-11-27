@@ -62,7 +62,7 @@ Setelah update, admin perlu login ulang (sesi disimpan di memori).
 sudo mikrotik-panel-update --status          # versi terpasang, hasil update terakhir, jadwal berikutnya
 sudo mikrotik-panel-update --check           # cek rilis terbaru tanpa memasang
 sudo mikrotik-panel-update                   # update sekarang
-sudo mikrotik-panel-update --rollback        # kembali ke rilis sebelumnya (beserta database)
+sudo mikrotik-panel-update --rollback        # kembali ke rilis sebelumnya (database terbaru tetap dipakai)
 sudo mikrotik-panel-update --version v0.1.0  # pasang versi tertentu
 sudo systemctl disable --now mikrotik-panel-update.timer   # matikan update otomatis
 ```

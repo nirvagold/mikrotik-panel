@@ -4,7 +4,7 @@
 #   mikrotik-panel-update            cek dan pasang bila ada rilis baru (dipakai timer)
 #   mikrotik-panel-update --check    hanya cek, tidak memasang
 #   mikrotik-panel-update --version TAG   pasang rilis tertentu (mis. v0.1.2), termasuk turun versi
-#   mikrotik-panel-update --rollback kembali ke rilis sebelumnya beserta database-nya
+#   mikrotik-panel-update --rollback kembali ke rilis sebelumnya (database terbaru dipertahankan; cadangan dipakai hanya bila perlu)
 #   mikrotik-panel-update --status   tampilkan versi terpasang dan hasil update terakhir
 #   mikrotik-panel-update --request  jalankan permintaan dari tombol panel (dipicu unit .path)
 #
@@ -32,7 +32,13 @@ die() { log "GAGAL: $*"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "Jalankan sebagai root (sudo)." >&2; exit 1; }
 mkdir -p "$STATE" "$BASE/releases" "$BASE/backups"
 exec 9>"$STATE/lock"
-flock -n 9 || { echo "Update lain sedang berjalan." >&2; exit 0; }
+if [ "${1:-}" = --request ]; then
+  # Tombol di panel: tunggu giliran (mis. update otomatis sedang jalan), jangan keluar diam-diam.
+  # Kalau keluar, file permintaan tetap ada dan systemd memicu ulang terus sampai unitnya macet.
+  flock -w 900 9 || { rm -f "$REQUEST"; echo "Update lain terlalu lama berjalan." >&2; exit 0; }
+else
+  flock -n 9 || { echo "Update lain sedang berjalan." >&2; exit 0; }
+fi
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=x86_64 ;;
@@ -73,6 +79,21 @@ latest_tag() {
   curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' \
     "${API_URL:-https://api.github.com}/repos/$REPO/releases/latest" |
     grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+# Tunggu sampai panel tidak sedang mengerjakan sesuatu (top-up, agen, perintah router),
+# paling lama IDLE_WAIT detik, supaya restart tidak memutus pekerjaan admin.
+IDLE_WAIT=${IDLE_WAIT:-180}
+wait_idle() {
+  local url body i
+  url=$(health_url)
+  for ((i = 0; i < IDLE_WAIT; i += 5)); do
+    body=$(curl -fsS --max-time 5 "$url" 2>/dev/null) || return 0
+    echo "$body" | grep -q '"busy":true' || return 0
+    [ "$i" = 0 ] && log "Panel sedang sibuk, menunggu sebelum restart…"
+    sleep 5
+  done
+  log "Panel masih sibuk setelah ${IDLE_WAIT} detik; restart tetap dilanjutkan."
 }
 
 healthy() {
@@ -148,6 +169,7 @@ install_tag() { # $1 = tag, $2 = auto|manual
   echo "$tag" > "$BASE/releases/$tag/VERSION"
 
   local backup="${prev:-none}-ke-$tag-$(date +%Y%m%d%H%M%S)"
+  wait_idle
   systemctl stop "$SERVICE" 9>&- 2>/dev/null || true
   backup_db "$backup"
   switch_to "$tag"
@@ -229,6 +251,9 @@ handle_request() { # isi file permintaan dari panel: hanya "check" atau "install
 }
 
 rollback() {
+  # Database TIDAK dikembalikan dulu: trafik, riwayat, dan chat sejak update tetap ada.
+  # Perubahan skema hanya menambah tabel, jadi versi lama biasanya tetap bisa membacanya.
+  # Bila versi lama tidak sehat dengan database sekarang, baru database cadangan dipakai.
   local cur prev backup
   cur=$(current_tag)
   prev=$(cat "$STATE/previous" 2>/dev/null || true)
@@ -236,15 +261,24 @@ rollback() {
   [ -n "$prev" ] || die "tidak ada rilis sebelumnya"
   backup=$(ls -1t "$BASE/backups" | grep -- "^$prev-ke-$cur-" | head -1 || true)
   log "Rollback $cur → $prev"
+  wait_idle
   systemctl stop "$SERVICE" 9>&- 2>/dev/null || true
   backup_db "$cur-rollback-$(date +%Y%m%d%H%M%S)"
-  [ -n "$backup" ] && restore_db "$backup"
   switch_to "$prev"
   touch "$BASE/releases/$prev"
   echo "$cur" >> "$STATE/bad"
   echo "$cur" > "$STATE/previous"
   systemctl start "$SERVICE" 9>&-
-  healthy "$prev" && log "Rollback selesai, panel di $prev." || die "panel $prev tidak sehat setelah rollback"
+  if healthy "$prev"; then
+    log "Rollback selesai, panel di $prev (database tetap yang terbaru)."
+    return 0
+  fi
+  [ -n "$backup" ] || die "panel $prev tidak sehat setelah rollback dan tidak ada cadangan database"
+  log "Panel $prev tidak sehat dengan database sekarang; memakai cadangan $backup."
+  systemctl stop "$SERVICE" 9>&- 2>/dev/null || true
+  restore_db "$backup"
+  systemctl start "$SERVICE" 9>&-
+  healthy "$prev" && log "Rollback selesai, panel di $prev (database dari cadangan)." || die "panel $prev tidak sehat setelah rollback"
 }
 
 case "${1:-}" in

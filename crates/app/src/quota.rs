@@ -88,6 +88,11 @@ impl Quota {
         }
     }
 
+    /// Sedang menerapkan top-up.
+    pub fn busy(&self) -> bool {
+        self.apply_lock.try_lock().is_err()
+    }
+
     /// Terapkan perubahan. Hasil: "Terverifikasi", "Ditolak: ..." atau "Hasil belum terverifikasi".
     pub async fn apply(&self, router: &RouterOs, op: &PendingOp) -> String {
         let _guard = self.apply_lock.lock().await;

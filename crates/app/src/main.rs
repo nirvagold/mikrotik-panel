@@ -223,6 +223,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
         runs: Default::default(),
         config,
     });
+    restore_after_restart(&state).await;
     poller::spawn(state.clone());
     snapshots::spawn(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
@@ -238,4 +239,44 @@ async fn run(config: Config) -> anyhow::Result<()> {
     })
     .await?;
     Ok(())
+}
+
+/// Setelah panel menyala: pulihkan sesi login, dan tandai pekerjaan yang terputus oleh restart
+/// supaya tidak tertahan selamanya di "sedang dijalankan" / "Menunggu verifikasi".
+async fn restore_after_restart(state: &http::Shared) {
+    let now = store::now();
+    let restored = state
+        .store
+        .run(move |c| {
+            c.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [now])?;
+            let mut s = c.prepare("SELECT token_hash, csrf, expires_at FROM admin_sessions")?;
+            let rows = s
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let cards = c.execute(
+                "UPDATE agent_proposals SET status = 'failed', result = 'Terputus karena panel dinyalakan ulang. Cek hasilnya di router sebelum mencoba lagi.', decided_at = ?1 WHERE status = 'approved'",
+                [now],
+            )?;
+            let audits = c.execute(
+                "UPDATE audit SET status = 'Terputus (panel restart), cek ulang di router' WHERE status = 'Menunggu verifikasi'",
+                [],
+            )?;
+            Ok((rows, cards, audits))
+        })
+        .await;
+    match restored {
+        Ok((rows, cards, audits)) => {
+            let n = rows.len();
+            for (hash, csrf, expires) in rows {
+                state.sessions.restore(hash, csrf, expires.max(0) as u64);
+            }
+            if n > 0 {
+                tracing::info!("{n} sesi login dipulihkan");
+            }
+            if cards + audits > 0 {
+                tracing::warn!("{cards} usulan dan {audits} riwayat terputus oleh restart ditandai");
+            }
+        }
+        Err(e) => tracing::warn!("gagal memulihkan keadaan setelah restart: {e}"),
+    }
 }
