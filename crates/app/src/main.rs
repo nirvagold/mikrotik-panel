@@ -5,6 +5,7 @@ mod design_upgrade;
 mod api;
 mod events;
 mod http;
+mod inflight;
 mod migrate;
 mod poller;
 mod quota;

@@ -36,13 +36,19 @@ function CustomerDetail() {
 
   const load = () => {
     if (!account) return;
-    get<typeof data>(`/api/customers/${encodeURIComponent(account)}?days=30`).then(d => { setData(d); setError(null); }).catch(e => setError(e.message));
+    const want = account;
+    // Jawaban yang datang terlambat untuk pelanggan sebelumnya diabaikan, supaya tombol top-up
+    // tidak pernah mengarah ke pelanggan yang salah.
+    const still = () => query.value.get('akun') === want;
+    get<typeof data>(`/api/customers/${encodeURIComponent(want)}?days=30`)
+      .then(d => { if (still()) { setData(d); setError(null); } })
+      .catch(e => { if (still()) setError(e.message); });
   };
   useEffect(() => { setData(null); setOp(null); setNotice(null); setLogs(null); load(); return account ? on('telemetry.update', load) : undefined; }, [account]);
 
   if (!account) return <p class="muted">Pilih pelanggan di tabel untuk melihat detail dan menambah kuota.</p>;
   if (error) return <p class="alert">{error}</p>;
-  if (!data) return <p class="muted">Memuat {account}…</p>;
+  if (!data || data.customer.name !== account) return <p class="muted">Memuat {account}…</p>;
   const c = data.customer;
 
   const preview = async (e: Event) => {

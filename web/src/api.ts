@@ -6,7 +6,7 @@ export const authed = signal<boolean | null>(null);
 let csrf = '';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly data: Record<string, unknown> = {}) {
     super(message);
   }
 }
@@ -24,7 +24,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (res.status === 401 && path !== '/api/login') authed.value = false;
-  if (!res.ok) throw new ApiError(data.error ?? `Permintaan gagal (${res.status}).`, res.status);
+  if (!res.ok) throw new ApiError(data.error ?? `Permintaan gagal (${res.status}).`, res.status, data);
   return data as T;
 }
 

@@ -257,10 +257,61 @@ pub async fn run_command(st: &Shared, cmd: &PolicyCommand) -> R<(String, Value)>
         }
         _ => Value::Null,
     };
+    let mut done: Vec<&String> = Vec::new();
     for id in &found {
-        st.router.call(&build(Some(id))?).await.map_err(e)?;
+        if let Err(err) = st.router.call(&build(Some(id))?).await {
+            if done.is_empty() {
+                return Err(e(err));
+            }
+            // Sebagian objek sudah berubah: simpan nilai lama objek-objek itu agar tetap bisa dikembalikan.
+            let partial = only_ids(&before, &done);
+            return Err(Partial::message(
+                format!("Gagal setelah {} dari {} objek berubah: {err}", done.len(), found.len()),
+                partial,
+            ));
+        }
+        done.push(id);
     }
     Ok((format!("Perintah dijalankan pada {} objek.", found.len()), before))
+}
+
+/// Data revert yang dibatasi pada objek yang benar-benar sudah berubah.
+fn only_ids(before: &Value, done: &[&String]) -> Value {
+    let keep = |v: &Value| v.as_str().is_some_and(|id| done.iter().any(|d| d.as_str() == id));
+    let mut out = before.clone();
+    if let Some(items) = out.get_mut("items").and_then(Value::as_array_mut) {
+        items.retain(|i| keep(&i["id"]));
+    }
+    for key in ["disable", "enable"] {
+        if let Some(ids) = out.get_mut(key).and_then(Value::as_array_mut) {
+            ids.retain(keep);
+        }
+    }
+    out
+}
+
+/// Kegagalan sebagian dibawa lewat pesan error: penanda + JSON data revert setelah baris pertama.
+struct Partial;
+
+impl Partial {
+    const MARK: &'static str = "\n#partial-revert#";
+
+    fn message(text: String, before: Value) -> String {
+        if before.is_null() { text } else { format!("{text}{}{before}", Self::MARK) }
+    }
+
+    /// Pisahkan pesan untuk pengguna dan data revert (bila ada).
+    fn split(msg: &str) -> (String, Option<Value>) {
+        match msg.split_once(Self::MARK) {
+            Some((text, data)) => (text.to_string(), serde_json::from_str(data).ok()),
+            None => (msg.to_string(), None),
+        }
+    }
+}
+
+/// Bungkus `run_command` untuk pemanggil yang hanya butuh pesan (tanpa data revert).
+pub async fn run_command_text(st: &Shared, cmd: &PolicyCommand) -> R<(String, Value)> {
+    run_command(st, cmd).await.map_err(|m| Partial::split(&m).0)
 }
 
 fn values_of(row: &Row, keys: &[&str]) -> Value {
@@ -515,10 +566,19 @@ pub async fn run(st: &Shared, id: &str, values: &Value, actor: &str) -> R<(Strin
     let run_id = random_token();
     let (msg, before, ok) = match outcome {
         Ok((m, b)) => (m, b, true),
-        Err(m) => (m, Value::Null, false),
+        Err(m) => {
+            let (text, partial) = Partial::split(&m);
+            (text, partial.unwrap_or(Value::Null), false)
+        }
+    };
+    // Gagal di tengah tapi sebagian objek berubah: "partial" tetap bisa dikembalikan.
+    let status = match (ok, before.is_null()) {
+        (true, _) => "done",
+        (false, false) => "partial",
+        (false, true) => "failed",
     };
     let (rid, aid, params, cmd_text, snap, result) = (run_id.clone(), a.id.clone(), serde_json::to_string(&values).unwrap_or_default(), rendered.clone(),
-        (!before.is_null()).then(|| before.to_string()), if ok { "done" } else { "failed" }.to_string());
+        (!before.is_null()).then(|| before.to_string()), status.to_string());
     let (label, actor, msg2) = (a.label.clone(), actor.to_string(), msg.clone());
     let _ = st
         .store
@@ -541,6 +601,9 @@ pub async fn run(st: &Shared, id: &str, values: &Value, actor: &str) -> R<(Strin
 
 /// Kembalikan nilai lama dari satu eksekusi tombol.
 pub async fn revert_run(st: &Shared, run_id: &str, actor: &str) -> R<String> {
+    let Some(_busy) = crate::inflight::claim(format!("revert:{run_id}")) else {
+        return Err("Pengembalian ini sedang diproses.".into());
+    };
     let rid = run_id.to_string();
     let row = st
         .store
@@ -551,7 +614,7 @@ pub async fn revert_run(st: &Shared, run_id: &str, actor: &str) -> R<String> {
         .await
         .map_err(e)?
         .ok_or("Eksekusi tidak ditemukan.")?;
-    if row.1.as_deref() != Some("done") {
+    if !matches!(row.1.as_deref(), Some("done" | "partial")) {
         return Err("Hanya eksekusi yang berhasil dan belum dikembalikan yang bisa dikembalikan.".into());
     }
     let data: Value = row.0.as_deref().and_then(|s| serde_json::from_str(s).ok()).ok_or("Eksekusi ini tidak menyimpan nilai lama (mis. remove), jadi tidak bisa dikembalikan.")?;
@@ -654,6 +717,9 @@ async fn action_run(State(st): State<Shared>, Path(id): Path<String>, Json(b): J
         return fail(StatusCode::FORBIDDEN, msg);
     }
     let values = if b.values.is_null() { json!({}) } else { b.values };
+    let Some(_busy) = crate::inflight::claim(format!("action:{id}")) else {
+        return fail(StatusCode::CONFLICT, "Tombol ini masih dijalankan. Tunggu hasilnya dulu.");
+    };
     match run(&st, &id, &values, "admin").await {
         Ok((msg, run_id)) => Json(json!({ "ok": true, "message": msg, "run_id": run_id })).into_response(),
         Err(m) => fail(StatusCode::BAD_REQUEST, m),
@@ -674,6 +740,9 @@ struct AcceptBody {
 
 /// Terapkan saran: bila saran membawa perintah perbaikan, jalankan dengan izin sesuai risikonya.
 async fn recommendation_accept(State(st): State<Shared>, Path(id): Path<String>, body: Option<Json<AcceptBody>>) -> Response {
+    let Some(_busy) = crate::inflight::claim(format!("recommendation:{id}")) else {
+        return fail(StatusCode::CONFLICT, "Saran ini sedang diterapkan.");
+    };
     let id2 = id.clone();
     let row = st
         .store
@@ -697,7 +766,7 @@ async fn recommendation_accept(State(st): State<Shared>, Path(id): Path<String>,
         if !perm.is_satisfied(true, body.and_then(|b| b.0.typed).as_deref(), title) {
             return fail(StatusCode::FORBIDDEN, format!("Ketik \"{}\" untuk menjalankan perintah kritis ini.", perm.confirmation_phrase(title).unwrap_or_default()));
         }
-        match run_command(&st, &cmd).await {
+        match run_command_text(&st, &cmd).await {
             Ok((m, _)) => message = format!("{} {m}", cmd.render().unwrap_or_default()),
             Err(m) => return fail(StatusCode::BAD_REQUEST, m),
         }

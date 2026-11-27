@@ -396,8 +396,8 @@ export function ActionButton({ block }: Props<'action_button'>) {
           </div>
           {info.runs.length > 0 && (
             <ul class="action-runs">{info.runs.map(r => (
-              <li key={r.id}><span class="muted">{new Date(r.at * 1000).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}</span> <code>{r.command}</code> <span class={r.result === 'done' ? '' : 'muted'}>{r.result === 'done' ? 'berhasil' : r.result === 'reverted' ? 'dikembalikan' : 'gagal'}</span>
-                {r.result === 'done' && r.revertible && <button type="button" class="link-btn" disabled={busy} onClick={() => void revert(r)}>Kembalikan</button>}
+              <li key={r.id}><span class="muted">{new Date(r.at * 1000).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}</span> <code>{r.command}</code> <span class={r.result === 'done' ? '' : 'muted'}>{r.result === 'done' ? 'berhasil' : r.result === 'reverted' ? 'dikembalikan' : r.result === 'partial' ? 'gagal sebagian' : 'gagal'}</span>
+                {(r.result === 'done' || r.result === 'partial') && r.revertible && <button type="button" class="link-btn" disabled={busy} onClick={() => void revert(r)}>Kembalikan</button>}
               </li>
             ))}</ul>
           )}

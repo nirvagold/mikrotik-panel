@@ -98,6 +98,23 @@ impl LoginLimiter {
         (*count >= self.max_failures && elapsed < self.window).then(|| self.window - elapsed)
     }
 
+    /// Catat satu percobaan sebelum kata sandi diperiksa (atomik), supaya percobaan paralel
+    /// tidak bisa melewati batas. Berhasil masuk menghapus catatan lewat `succeeded`.
+    pub fn begin(&self, ip: IpAddr) -> Result<(), Duration> {
+        let mut map = self.inner.lock().unwrap();
+        let now = Instant::now();
+        map.retain(|_, (_, since)| now.duration_since(*since) < self.window);
+        let entry = map.entry(ip).or_insert((0, now));
+        if entry.0 >= self.max_failures {
+            return Err(self.window.saturating_sub(now.duration_since(entry.1)));
+        }
+        entry.0 += 1;
+        if entry.0 >= self.max_failures {
+            entry.1 = now;
+        }
+        Ok(())
+    }
+
     pub fn failed(&self, ip: IpAddr) {
         let mut map = self.inner.lock().unwrap();
         let now = Instant::now();
@@ -154,6 +171,11 @@ mod tests {
         assert!(l.locked(ip).is_some());
         l.succeeded(ip);
         assert!(l.locked(ip).is_none());
+        // Percobaan dicatat sebelum diperiksa: percobaan ke-4 ditolak walau belum ada yang selesai.
+        for _ in 0..3 {
+            assert!(l.begin(ip).is_ok());
+        }
+        assert!(l.begin(ip).is_err());
     }
 
     #[test]

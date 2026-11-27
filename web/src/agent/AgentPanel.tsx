@@ -1,7 +1,7 @@
 // Panel chat agen ala Claude. Dirender di Shadow DOM (lihat mount.tsx) supaya
 // CSS khusus buatan agen tidak bisa merusak panel ini atau tombol Terapkan/Reset.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { get, post } from '../api';
+import { ApiError, get, post } from '../api';
 import { on } from '../events';
 import { keyIntent, parseSlash, SLASH_HELP } from './composer';
 import * as design from './design-store';
@@ -70,6 +70,10 @@ export function AgentPanel() {
   const [editing, setEditing] = useState<string | null>(null);
   const [draftText, setDraftText] = useState(() => storage(`agent-draft:${storage('agent-conversation') || 'new'}`));
   const [problem, setProblem] = useState('');
+  /** Percakapan lain yang sedang dikerjakan agen (dari jawaban 409), untuk tombol "Buka". */
+  const [busyConv, setBusyConv] = useState<string | null>(null);
+  /** Kartu usulan yang sedang dikirim keputusannya: tombolnya dikunci supaya tidak terkirim dua kali. */
+  const [deciding, setDeciding] = useState<string | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
@@ -309,6 +313,8 @@ export function AgentPanel() {
       setRunId(null);
       updateDraft(body);
       setProblem((e as Error).message);
+      const other = e instanceof ApiError && e.status === 409 ? e.data.conversation_id : null;
+      setBusyConv(typeof other === 'string' && other !== id ? other : null);
     }
   }
 
@@ -352,11 +358,14 @@ export function AgentPanel() {
   }
 
   async function decide(card: ProposalCard, approve: boolean) {
+    if (deciding) return;
+    setDeciding(card.id);
     try {
       const result = await post<{ card: ProposalCard }>(`/api/agent/proposals/${encodeURIComponent(card.id)}/${approve ? 'approve' : 'reject'}`,
         approve && card.permission === 'critical' ? { typed: typed[card.id] ?? '' } : {});
       setProposals(list => list.map(p => p.id === card.id ? result.card : p));
     } catch (e) { setProblem((e as Error).message); }
+    finally { setDeciding(null); }
   }
 
   async function undoCard(card: ProposalCard) {
@@ -401,7 +410,7 @@ export function AgentPanel() {
             {used.length > 0 && <ul class="chips">{used.map(t => <li key={t.id} class="chip done">{TOOL_LABELS[t.name] ?? t.name}</li>)}</ul>}
             {text && <Markdown text={text} />}
             {used.filter(t => t.name === 'show_card').map(t => <ShowCard key={`card-${t.id}`} input={t.input} />)}
-            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
+            {cardsFor(m).map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} busy={deciding === card.id} onDecide={decide} onRevert={undoCard} />)}
             {lastOfTurn && !running && <div class="actions">
               {text && <button type="button" onClick={() => void navigator.clipboard?.writeText(text)}>Salin</button>}
               <button type="button" onClick={() => regenerate(index)}>Ulangi</button>
@@ -409,7 +418,7 @@ export function AgentPanel() {
             </div>}
           </article>;
         })}
-        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} onDecide={decide} onRevert={undoCard} />)}
+        {orphanCards.map(card => <Card key={card.id} card={card} typed={typed[card.id] ?? ''} onType={v => setTyped(t => ({ ...t, [card.id]: v }))} busy={deciding === card.id} onDecide={decide} onRevert={undoCard} />)}
   </>, [messages, proposals, typed, editing, running, conversation]);
 
   if (!open) {
@@ -474,7 +483,7 @@ export function AgentPanel() {
 
       <form class="composer" onSubmit={e => { e.preventDefault(); void submit(); }}>
         {awayFromBottom && visible.length > 0 && <button type="button" class="jump" onClick={() => { stick.current = true; toBottom(); }}>↓ Pesan terbaru</button>}
-        {problem && <p class="problem" role="alert">{problem} <button type="button" class="link" onClick={() => setProblem('')}>Tutup</button></p>}
+        {problem && <p class="problem" role="alert">{problem} {busyConv && <button type="button" class="link" onClick={() => { const id = busyConv; setBusyConv(null); setProblem(''); setConversation(id); convRef.current = id; void loadMessages(id); }}>Buka percakapan itu</button>} <button type="button" class="link" onClick={() => { setProblem(''); setBusyConv(null); }}>Tutup</button></p>}
         {editing && <p class="editing-note">Mengedit pesan. Percakapan dan desain setelah pesan ini akan diganti. <button type="button" class="link" onClick={() => { setEditing(null); updateDraft(''); }}>Batal</button></p>}
         {slashHints.length > 0 && <ul class="slash">{slashHints.map(([cmd, help]) =>
           <li key={cmd}><button type="button" onClick={() => { updateDraft(cmd.split(' ')[0] + (cmd.includes(' ') ? ' ' : '')); input.current?.focus(); }}><b>{cmd}</b> {help}</button></li>)}</ul>}
@@ -502,7 +511,7 @@ function Elapsed({ since }: { since: number }) {
   return s >= 2 ? <span class="elapsed"> {s} dtk</span> : null;
 }
 
-function Card({ card, typed, onType, onDecide, onRevert }: { card: ProposalCard; typed: string; onType: (v: string) => void; onDecide: (c: ProposalCard, ok: boolean) => void; onRevert: (c: ProposalCard) => void }) {
+function Card({ card, typed, busy, onType, onDecide, onRevert }: { card: ProposalCard; typed: string; busy: boolean; onType: (v: string) => void; onDecide: (c: ProposalCard, ok: boolean) => void; onRevert: (c: ProposalCard) => void }) {
   const revertable = card.status === 'done' && typeof card.input?.previous_address === 'string' && card.input?.reverted !== true;
   const critical = card.permission === 'critical';
   const phrase = card.label.trim().toLowerCase();
@@ -515,9 +524,9 @@ function Card({ card, typed, onType, onDecide, onRevert }: { card: ProposalCard;
         <div class="card-actions">
           {critical && <label class="confirm"><span>Ketik <b>{phrase}</b> untuk melanjutkan</span>
             <input value={typed} onInput={e => onType((e.target as HTMLInputElement).value)} autoComplete="off" spellcheck={false} /></label>}
-          <button type="button" class={critical ? 'danger' : 'primary'} disabled={critical && typed.trim().toLowerCase() !== phrase} onClick={() => onDecide(card, true)}>
-            {critical ? 'Jalankan' : 'Setujui'}</button>
-          <button type="button" class="ghost" onClick={() => onDecide(card, false)}>Tolak</button>
+          <button type="button" class={critical ? 'danger' : 'primary'} disabled={busy || (critical && typed.trim().toLowerCase() !== phrase)} onClick={() => onDecide(card, true)}>
+            {busy ? 'Memproses…' : critical ? 'Jalankan' : 'Setujui'}</button>
+          <button type="button" class="ghost" disabled={busy} onClick={() => onDecide(card, false)}>Tolak</button>
         </div>
       ) : <p class="card-status">{({ approved: 'Disetujui, sedang dijalankan…', rejected: 'Ditolak.', done: 'Selesai.', failed: 'Gagal.' } as Record<string, string>)[card.status]}{card.result ? ` ${card.result}` : ''}{revertable && <> <button type="button" class="ghost" onClick={() => onRevert(card)}>Kembalikan nilai lama</button></>}</p>}
     </div>

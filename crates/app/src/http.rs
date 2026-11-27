@@ -141,7 +141,7 @@ async fn login(
 ) -> Response {
     let forwarded = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let ip = auth::client_ip(peer.ip(), forwarded, &state.config.trusted_proxies);
-    if let Some(wait) = state.limiter.locked(ip) {
+    if let Err(wait) = state.limiter.begin(ip) {
         let minutes = wait.as_secs().div_ceil(60);
         return error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -165,7 +165,7 @@ async fn login(
         })
         .await;
     if !ok {
-        state.limiter.failed(ip);
+        // Percobaan ini sudah dihitung oleh `begin`.
         return error(StatusCode::UNAUTHORIZED, "Kata sandi salah.");
     }
     state.limiter.succeeded(ip);
