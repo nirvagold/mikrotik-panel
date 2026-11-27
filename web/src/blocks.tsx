@@ -9,7 +9,19 @@ import { on } from './events';
 type Props<K extends Block['kind']> = { block: Extract<Block, { kind: K }> };
 
 function Waiting() {
+  // Pertama kali dipakai / router belum tersambung: jelaskan langkahnya, jangan "Memuat…" selamanya.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSlow(true), 12000); return () => clearTimeout(t); }, []);
   if (loadError.value) return <p class="muted">Data gagal dimuat: {loadError.value}</p>;
+  if (!routerStatus.value.ok || slow) return (
+    <div class="muted stack">
+      <p>Belum ada data dari router.{routerStatus.value.hint ? ` ${routerStatus.value.hint}` : ''}</p>
+      <ol class="small">
+        <li>Buka <a href="/pengaturan?tab=router">Pengaturan → Router</a> dan tekan <b>Tes koneksi</b>.</li>
+        <li>Atur penyedia AI di <a href="/pengaturan?tab=ai">Pengaturan → AI</a> supaya agen bisa membantu.</li>
+      </ol>
+    </div>
+  );
   return <p class="muted">Memuat data…</p>;
 }
 

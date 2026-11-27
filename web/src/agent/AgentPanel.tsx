@@ -491,7 +491,7 @@ export function AgentPanel() {
 
       <form class="composer" onSubmit={e => { e.preventDefault(); void submit(); }}>
         {awayFromBottom && visible.length > 0 && <button type="button" class="jump" onClick={() => { stick.current = true; toBottom(); }}>↓ Pesan terbaru</button>}
-        {problem && <p class="problem" role="alert">{problem} {busyConv && <button type="button" class="link" onClick={() => { const id = busyConv; setBusyConv(null); setProblem(''); setConversation(id); convRef.current = id; void loadMessages(id); }}>Buka percakapan itu</button>} <button type="button" class="link" onClick={() => { setProblem(''); setBusyConv(null); }}>Tutup</button></p>}
+        {problem && <p class="problem" role="alert">{problem} {problem.includes('Pengaturan AI') && <a class="link" href="/pengaturan?tab=ai">Buka Pengaturan AI</a>} {busyConv && <button type="button" class="link" onClick={() => { const id = busyConv; setBusyConv(null); setProblem(''); setConversation(id); convRef.current = id; void loadMessages(id); }}>Buka percakapan itu</button>} <button type="button" class="link" onClick={() => { setProblem(''); setBusyConv(null); }}>Tutup</button></p>}
         {editing && <p class="editing-note">Mengedit pesan. Percakapan dan desain setelah pesan ini akan diganti. <button type="button" class="link" onClick={() => { setEditing(null); updateDraft(''); }}>Batal</button></p>}
         {slashHints.length > 0 && <ul class="slash">{slashHints.map(([cmd, help]) =>
           <li key={cmd}><button type="button" onClick={() => { updateDraft(cmd.split(' ')[0] + (cmd.includes(' ') ? ' ' : '')); input.current?.focus(); }}><b>{cmd}</b> {help}</button></li>)}</ul>}

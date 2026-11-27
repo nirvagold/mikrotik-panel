@@ -17,8 +17,9 @@ export function Builtin({ block }: Props) {
     case 'audit': return <Audit />;
     case 'ai_settings': return <AiSettings />;
     case 'agent_memory': return <AgentMemory />;
-    case 'agent': return <p class="muted">Panel agen ada di sisi kanan layar. Tulis permintaan di sana, misalnya “buat tema gelap” atau “siapa yang kuotanya hampir habis?”.</p>;
+    case 'agent': return <p class="muted">Agen AI dibuka lewat tombol ✦ (di HP: tombol tengah menu bawah). Tulis permintaan di sana, misalnya “siapa yang kuotanya hampir habis?”.</p>;
     case 'actions': return <Actions />;
+    case 'settings': return <Settings />;
     default: return <p class="muted">Blok bawaan “{block.props.name}” belum tersedia.</p>;
   }
 }
@@ -257,6 +258,12 @@ function Audit() {
   );
 }
 
+const PROVIDERS = [
+  { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com/v1', protocol: 'openai', model: 'deepseek-chat' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', url: 'https://api.anthropic.com/v1', protocol: 'anthropic', model: '' },
+  { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1', protocol: 'openai', model: '' },
+];
+
 function AiSettings() {
   const [form, setForm] = useState({ url: '', protocol: 'anthropic', model: '', api_key: '', thinking: 'high' });
   const [hasKey, setHasKey] = useState(false);
@@ -268,7 +275,7 @@ function AiSettings() {
     try {
       const r = await post<{ models: { id: string; name: string }[] }>('/api/settings/ai/models', { url: form.url, protocol: form.protocol, api_key: form.api_key || null });
       setModels(r.models);
-      setNotice(`${r.models.length} model ditemukan. Pilih salah satu, lalu Simpan.`);
+      setNotice(`Koneksi berhasil: ${r.models.length} model ditemukan. Pilih salah satu, lalu Simpan.`);
     } catch (err) { setModels(null); setNotice((err as Error).message); }
     finally { setFetching(false); }
   };
@@ -279,6 +286,12 @@ function AiSettings() {
     }).catch(e => setNotice(e.message));
   }, []);
   const set = (k: keyof typeof form) => (e: Event) => setForm({ ...form, [k]: (e.target as HTMLInputElement).value });
+  const provider = PROVIDERS.find(p => p.url === form.url && p.protocol === form.protocol)?.id ?? 'custom';
+  const pickProvider = (id: string) => {
+    const p = PROVIDERS.find(x => x.id === id);
+    setModels(null);
+    if (p) setForm({ ...form, url: p.url, protocol: p.protocol, model: form.model && provider === id ? form.model : p.model });
+  };
   const save = async (e: Event) => {
     e.preventDefault();
     try {
@@ -289,12 +302,18 @@ function AiSettings() {
   return (
     <form class="stack" onSubmit={save}>
       <h2 class="block-title">Pengaturan AI</h2>
-      <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
-      <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
+      <label>Penyedia<select value={provider} onChange={e => pickProvider((e.target as HTMLSelectElement).value)}>
+        {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+        <option value="custom">Lainnya (isi sendiri)</option>
+      </select></label>
+      {provider === 'custom' && <>
+        <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
+        <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
+      </>}
       <label>API key<input type="password" autocomplete="off" value={form.api_key} onInput={set('api_key')} placeholder={hasKey ? 'Tersimpan; kosongkan untuk tetap memakai key lama' : ''} /></label>
       <label>Model<span class="row">
         <input style={{ flex: 1, minWidth: 0 }} value={form.model} onInput={set('model')} required maxLength={150} placeholder="Ketik, atau tekan Ambil model" />
-        <button type="button" class="ghost" onClick={() => void fetchModels()} disabled={fetching || !form.url}>{fetching ? 'Mengambil…' : 'Ambil model'}</button>
+        <button type="button" class="ghost" onClick={() => void fetchModels()} disabled={fetching || !form.url} title="Sekaligus menguji koneksi dan API key">{fetching ? 'Menguji…' : 'Tes & ambil model'}</button>
       </span></label>
       {models && models.length > 0 && <label>Model dari endpoint<select value={models.some(m => m.id === form.model) ? form.model : ''} onChange={e => setForm({ ...form, model: (e.target as HTMLSelectElement).value })}>
         <option value="" disabled>Pilih model…</option>
@@ -344,6 +363,137 @@ function Actions() {
       {rows.length === 0 ? <p class="muted">Belum ada tombol aksi. Minta agen membuatnya, misalnya “buat tombol putus sesi PPPoE pelanggan”.</p> : (
         <ul class="plain-list action-list">{rows.map(a => <li key={a.id}><ActionButton block={{ id: a.id, span: 1, kind: 'action_button', props: { action_id: a.id, label: a.label } } as never} /> <span class={`badge ${a.risk === 'critical' ? 'off' : 'idle'}`}>{({ read: 'baca', write: 'ubah', critical: 'kritis' } as Record<string, string>)[a.risk] ?? a.risk}</span></li>)}</ul>
       )}
+    </div>
+  );
+}
+
+// ---------- Pengaturan (Paket D) ----------
+
+const TABS: [string, string][] = [['panel', 'Panel'], ['router', 'Router'], ['ai', 'AI'], ['memori', 'Memori agen'], ['tampilan', 'Tampilan']];
+
+function Settings() {
+  const tab = TABS.some(([id]) => id === query.value.get('tab')) ? query.value.get('tab')! : 'panel';
+  return (
+    <div>
+      <div class="tabs" role="tablist" aria-label="Bagian pengaturan">
+        {TABS.map(([id, label]) => <button key={id} type="button" role="tab" class="chip" aria-selected={tab === id} aria-pressed={tab === id} onClick={() => navigate(`${location.pathname}?tab=${id}`)}>{label}</button>)}
+      </div>
+      {tab === 'panel' ? <PanelSettings /> : tab === 'router' ? <RouterSettings /> : tab === 'ai' ? <AiSettings /> : tab === 'memori' ? <AgentMemory /> : <LookSettings />}
+    </div>
+  );
+}
+
+type PanelInfo = { version: string; session_hours: number; poll_seconds: number; router: { host: string; port: number; user: string; tls: boolean } };
+
+function usePanelInfo() {
+  const [info, setInfo] = useState<PanelInfo | null>(null);
+  useEffect(() => { get<PanelInfo>('/api/settings/panel').then(setInfo).catch(() => {}); }, []);
+  return info;
+}
+
+function PasswordInput({ value, onInput, label, auto }: { value: string; onInput: (v: string) => void; label: string; auto: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label>{label}<span class="pw-field">
+      <input type={(show ? 'text' : 'password') as 'text'} autocomplete={auto} value={value} onInput={e => onInput((e.target as HTMLInputElement).value)} required />
+      <button type="button" class="ghost pw-eye" aria-label={show ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'} aria-pressed={show} onClick={() => setShow(v => !v)}>{show ? 'Sembunyikan' : 'Lihat'}</button>
+    </span></label>
+  );
+}
+
+function PanelSettings() {
+  const info = usePanelInfo();
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const save = async (e: Event) => {
+    e.preventDefault();
+    if (next !== again) { setMsg({ ok: false, text: 'Kata sandi baru dan ulangannya belum sama.' }); return; }
+    if (next.length < 10) { setMsg({ ok: false, text: 'Kata sandi baru minimal 10 karakter.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/settings/password', { current: cur, new: next });
+      setCur(''); setNext(''); setAgain('');
+      setMsg({ ok: true, text: 'Kata sandi diganti. Perangkat lain yang sedang masuk sudah dikeluarkan.' });
+    } catch (err) { setMsg({ ok: false, text: (err as Error).message }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Panel</h2>
+      <dl class="facts">
+        <dt>Versi</dt><dd>{info ? `v${info.version}` : '…'}</dd>
+        <dt>Tetap masuk selama</dt><dd>{info ? `${info.session_hours} jam (diatur di config server)` : '…'}</dd>
+      </dl>
+      <form class="stack" onSubmit={save}>
+        <h3 class="sub-title">Ganti kata sandi admin</h3>
+        <PasswordInput label="Kata sandi sekarang" value={cur} onInput={setCur} auto="current-password" />
+        <PasswordInput label="Kata sandi baru (minimal 10 karakter)" value={next} onInput={setNext} auto="new-password" />
+        <PasswordInput label="Ulangi kata sandi baru" value={again} onInput={setAgain} auto="new-password" />
+        <div class="row"><button type="submit" disabled={busy}>{busy ? 'Menyimpan…' : 'Ganti kata sandi'}</button></div>
+        {msg && <p class={msg.ok ? 'notice' : 'alert'} role="status">{msg.text}</p>}
+      </form>
+    </div>
+  );
+}
+
+function RouterSettings() {
+  const info = usePanelInfo();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const test = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/router/refresh');
+      const h = await get<{ router: { ok: boolean; identity?: string; error?: string } }>('/api/health');
+      setMsg(h.router.ok ? { ok: true, text: `Tersambung ke router “${h.router.identity}”. Data pelanggan sudah diperbarui.` } : { ok: false, text: h.router.error ?? 'Router tidak menjawab.' });
+      void refreshDashboard();
+    } catch (err) { setMsg({ ok: false, text: (err as Error).message }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Router</h2>
+      <dl class="facts">
+        <dt>Alamat</dt><dd>{info ? `${info.router.host}:${info.router.port}` : '…'}</dd>
+        <dt>User API</dt><dd>{info?.router.user ?? '…'}</dd>
+        <dt>Koneksi</dt><dd>{info ? (info.router.tls ? 'API-SSL (terenkripsi)' : 'API biasa (tidak terenkripsi)') : '…'}</dd>
+        <dt>Sinkron tiap</dt><dd>{info ? `${info.poll_seconds} detik` : '…'}</dd>
+      </dl>
+      <div class="row"><button type="button" onClick={test} disabled={busy}>{busy ? 'Menguji…' : 'Tes koneksi'}</button></div>
+      {msg && <p class={msg.ok ? 'notice' : 'alert'} role="status">{msg.text}</p>}
+      <p class="muted small">Alamat dan sandi router diubah di file config server (/etc/mikrotik-panel/config.toml), lalu restart panel.</p>
+    </div>
+  );
+}
+
+function LookSettings() {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const reset = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/design/reset');
+      await post('/api/design/apply');
+      setMsg('Tampilan bawaan dipasang lagi. Versi sebelumnya tetap tersimpan dan bisa dikembalikan lewat agen (/undo).');
+      setConfirming(false);
+    } catch (err) { setMsg((err as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Tampilan</h2>
+      <p class="muted">Kalau tampilan jadi berantakan setelah diubah agen, kembalikan ke tampilan bawaan di sini.</p>
+      {confirming ? (
+        <div class="confirm"><p>Ganti tampilan sekarang dengan tampilan bawaan?</p>
+          <div class="row"><button type="button" class="danger" onClick={reset} disabled={busy}>{busy ? 'Memasang…' : 'Ya, kembalikan'}</button><button type="button" class="ghost" onClick={() => setConfirming(false)} disabled={busy}>Batal</button></div>
+        </div>
+      ) : <div class="row"><button type="button" class="ghost" onClick={() => setConfirming(true)}>Kembalikan tampilan bawaan</button></div>}
+      {msg && <p class="notice" role="status">{msg}</p>}
+      <p class="muted small">Tidak bisa membuka halaman ini sama sekali? Buka <a href="/?design=default" onClick={e => { e.preventDefault(); location.assign('/?design=default'); }}>mode darurat</a> (tampilan bawaan tanpa mengubah apa pun).</p>
     </div>
   );
 }

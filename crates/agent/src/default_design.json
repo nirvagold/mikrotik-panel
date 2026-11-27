@@ -63,18 +63,8 @@
     "icon": "≡"
    },
    {
-    "page": "agen",
-    "label": "Agen AI",
-    "icon": "✧"
-   },
-   {
-    "page": "memori",
-    "label": "Memori agen",
-    "icon": "◌"
-   },
-   {
-    "page": "pengaturan-ai",
-    "label": "Pengaturan AI",
+    "page": "pengaturan",
+    "label": "Pengaturan",
     "icon": "⚙"
    }
   ]
@@ -236,46 +226,16 @@
    ]
   },
   {
-   "id": "agen",
-   "title": "Agen AI",
+   "id": "pengaturan",
+   "title": "Pengaturan",
    "columns": 1,
    "blocks": [
     {
-     "id": "agen-chat",
+     "id": "pengaturan",
      "span": 1,
      "kind": "builtin",
      "props": {
-      "name": "agent"
-     }
-    }
-   ]
-  },
-  {
-   "id": "memori",
-   "title": "Memori agen",
-   "columns": 1,
-   "blocks": [
-    {
-     "id": "memori-agen",
-     "span": 1,
-     "kind": "builtin",
-     "props": {
-      "name": "agent_memory"
-     }
-    }
-   ]
-  },
-  {
-   "id": "pengaturan-ai",
-   "title": "Pengaturan AI",
-   "columns": 1,
-   "blocks": [
-    {
-     "id": "ai-settings",
-     "span": 1,
-     "kind": "builtin",
-     "props": {
-      "name": "ai_settings"
+      "name": "settings"
      }
     }
    ]

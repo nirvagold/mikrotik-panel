@@ -309,3 +309,14 @@ th.sortable:hover { color: var(--text); }
 @media (max-width: 760px) { .content > .banner { margin: 12px 16px 0; } }
 .audit-change { max-width: 360px; overflow-wrap: anywhere; }
 .drawer form.row label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; } .drawer form.row input { width: 90px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 18px; }
+.pw-field { display: flex; gap: 6px; }
+.pw-field input { flex: 1; min-width: 0; }
+.pw-eye { flex: none; }
+.line-icon { display: block; width: 1em; height: 1em; }
+.nav-icon .line-icon { margin: 0 auto; }
+.tab-icon .line-icon { width: 21px; height: 21px; margin: 0 auto; }
+.sheet .tab-icon .line-icon { width: 20px; height: 20px; }
+.icon-btn .line-icon { width: 16px; height: 16px; margin: 0 auto; }
+.login-help { margin: 4px 0 0; line-height: 1.5; }
+.login-help code { font-size: 12px; }

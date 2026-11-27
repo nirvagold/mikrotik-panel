@@ -33,6 +33,8 @@ const USAGE: &str = "Pemakaian:
   mikrotik-panel gen-key                               buat secret_key baru
   mikrotik-panel hash-password                         hash kata sandi admin (dibaca dari stdin)
   mikrotik-panel encrypt [--config PATH]               enkripsi kata sandi router (dibaca dari stdin)
+  mikrotik-panel reset-password [--config PATH]        lupa sandi: hapus sandi yang diganti lewat panel,
+                                                       kembali memakai admin_password_hash di config
   mikrotik-panel router-fingerprint [--config PATH]    tampilkan sidik jari sertifikat API-SSL router
   mikrotik-panel migrate --from PANEL.sqlite3 [--old-config private.json] [--config PATH]
                                                        pindahkan data panel lama (sekali saja)";
@@ -120,6 +122,21 @@ fn main() -> anyhow::Result<()> {
             let config = Config::load(&args.config)?;
             let cipher = Cipher::from_base64(&config.secret_key)?;
             println!("{}", cipher.encrypt(&read_secret("Kata sandi router: ")?));
+            Ok(())
+        }
+        "reset-password" => {
+            let config = Config::load(&args.config)?;
+            let conn = rusqlite::Connection::open(&config.database)?;
+            let n = conn.execute("DELETE FROM settings WHERE key = 'admin_password_hash'", [])?;
+            conn.execute("DELETE FROM admin_sessions", []).ok();
+            println!(
+                "{}",
+                if n > 0 {
+                    "Sandi dari panel dihapus. Masuk memakai sandi di config (admin_password_hash), lalu restart panel: systemctl restart mikrotik-panel"
+                } else {
+                    "Tidak ada sandi yang diganti lewat panel; sandi di config sudah berlaku."
+                }
+            );
             Ok(())
         }
         "router-fingerprint" => {

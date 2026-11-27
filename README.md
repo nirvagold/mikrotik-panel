@@ -67,6 +67,10 @@ sudo mikrotik-panel-update --version v0.1.0  # pasang versi tertentu
 sudo systemctl disable --now mikrotik-panel-update.timer   # matikan update otomatis
 ```
 
+Kata sandi admin bisa diganti di panel (Pengaturan → Panel). Lupa sandi: jalankan
+`sudo /opt/mikrotik-panel/current/mikrotik-panel reset-password` lalu `sudo systemctl restart mikrotik-panel`,
+dan masuk memakai sandi di config (buat hash baru dengan `mikrotik-panel hash-password` bila perlu).
+
 Membuat rilis: di GitHub buka Actions → build → Run workflow, isi `release` dengan tag baru (mis. `v0.1.1`); atau `git tag v0.1.1 && git push origin v0.1.1`. GitHub Actions membangun binary dengan
 versi dari tag dan mengunggah binary, `SHA256SUMS`, skrip, dan unit systemd ke halaman rilis.
 

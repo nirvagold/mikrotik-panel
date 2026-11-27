@@ -207,6 +207,8 @@ pub enum BuiltinView {
     AgentMemory,
     AiSettings,
     Actions,
+    /// Halaman Pengaturan bertab: panel, router, AI, memori agen, tampilan.
+    Settings,
 }
 
 fn valid_id(id: &str) -> bool {
@@ -380,13 +382,12 @@ impl DesignSpec {
                 }
             }
         }
-        // Halaman agen dan pengaturan AI harus selalu bisa dicapai, apa pun desainnya.
-        for required in [BuiltinView::Agent, BuiltinView::AiSettings] {
-            if !self.pages.iter().flat_map(|p| &p.blocks)
-                .any(|b| b.kind == BlockKind::Builtin { name: required })
-            {
-                return err("Halaman Agen AI dan Pengaturan AI tidak boleh dihapus.");
-            }
+        // Pengaturan (termasuk Pengaturan AI) harus selalu bisa dicapai, apa pun desainnya.
+        // Chat agen sendiri selalu tersedia lewat tombol popup, jadi tidak butuh halaman.
+        if !self.pages.iter().flat_map(|p| &p.blocks).any(|b| {
+            matches!(b.kind, BlockKind::Builtin { name: BuiltinView::Settings | BuiltinView::AiSettings })
+        }) {
+            return err("Halaman Pengaturan tidak boleh dihapus.");
         }
         if self.nav.items.is_empty() || self.nav.items.len() > MAX_PAGES {
             return err("Menu harus berisi 1 sampai 20 item.");

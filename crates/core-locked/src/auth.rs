@@ -111,6 +111,12 @@ impl Sessions {
         self.inner.lock().unwrap().remove(&token_hash(token));
     }
 
+    /// Hapus semua sesi kecuali milik `token` (setelah kata sandi diganti).
+    pub fn retain_only(&self, token: &str) {
+        let keep = token_hash(token);
+        self.inner.lock().unwrap().retain(|h, _| *h == keep);
+    }
+
     pub fn ttl(&self) -> Duration {
         self.ttl
     }

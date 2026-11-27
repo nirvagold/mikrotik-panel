@@ -22,6 +22,24 @@ const renderers: BlockRenderers = {
 /** ?design=default: mode darurat, tampilkan desain bawaan tanpa mengubah apa pun di server. */
 const emergency = new URLSearchParams(location.search).get('design') === 'default';
 
+/** Ikon garis untuk menu bawaan; halaman buatan agen tetap memakai ikon teksnya sendiri. */
+const ICON_PATHS: Record<string, string> = {
+  ringkasan: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
+  pelanggan: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+  router: 'M2 14h20v6H2zM6 17h.01M10 17h.01M12 14V8M8 6a6 6 0 0 1 8 0M5 3a10 10 0 0 1 14 0',
+  aksi: 'M13 2 3 14h9l-1 8 10-12h-9z',
+  riwayat: 'M12 7v5l3 3M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+  pengaturan: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  lainnya: 'M4 6h16M4 12h16M4 18h16',
+  keluar: 'M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0',
+};
+
+function NavIcon({ page, fallback }: { page: string; fallback?: string }) {
+  const d = ICON_PATHS[page];
+  if (!d) return <>{fallback}</>;
+  return <svg class="line-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={d} /></svg>;
+}
+
 /** Menu bawah ala Instagram untuk HP (permintaan Usep 2026-11-26): 3 halaman utama, tombol
  *  agen di tengah, dan "Lainnya" berisi sisa menu serta Keluar. Di layar lebar disembunyikan CSS. */
 function TabBar({ items, current }: { items: DesignSpec['nav']['items']; current?: string }) {
@@ -32,7 +50,7 @@ function TabBar({ items, current }: { items: DesignSpec['nav']['items']; current
   const restActive = rest.some(i => i.page === current);
   const link = (item: DesignSpec['nav']['items'][number]) => (
     <a key={item.page} href={`/${item.page}`} class="tab" aria-current={current === item.page ? 'page' : undefined}>
-      <span class="tab-icon" aria-hidden="true">{item.icon}</span><span class="tab-label">{item.label}</span>
+      <span class="tab-icon" aria-hidden="true"><NavIcon page={item.page} fallback={item.icon} /></span><span class="tab-label">{item.label}</span>
     </a>
   );
   return (
@@ -44,7 +62,7 @@ function TabBar({ items, current }: { items: DesignSpec['nav']['items']; current
         </button>
         {main.slice(2).map(link)}
         <button type="button" class="tab" aria-expanded={more} aria-current={restActive ? 'page' : undefined} onClick={() => setMore(m => !m)}>
-          <span class="tab-icon" aria-hidden="true">☰</span><span class="tab-label">Lainnya</span>
+          <span class="tab-icon" aria-hidden="true"><NavIcon page="lainnya" /></span><span class="tab-label">Lainnya</span>
         </button>
       </nav>
       {more && (
@@ -52,8 +70,8 @@ function TabBar({ items, current }: { items: DesignSpec['nav']['items']; current
           <div class="sheet" role="dialog" aria-label="Menu lainnya" onClick={e => e.stopPropagation()}>
             <span class="sheet-grip" aria-hidden="true" />
             <ul>
-              {rest.map(item => <li key={item.page}><a href={`/${item.page}`} onClick={() => setMore(false)} aria-current={current === item.page ? 'page' : undefined}><span class="tab-icon" aria-hidden="true">{item.icon}</span>{item.label}</a></li>)}
-              <li><button type="button" onClick={() => void logout()}><span class="tab-icon" aria-hidden="true">⏻</span>Keluar</button></li>
+              {rest.map(item => <li key={item.page}><a href={`/${item.page}`} onClick={() => setMore(false)} aria-current={current === item.page ? 'page' : undefined}><span class="tab-icon" aria-hidden="true"><NavIcon page={item.page} fallback={item.icon} /></span>{item.label}</a></li>)}
+              <li><button type="button" onClick={() => void logout()}><span class="tab-icon" aria-hidden="true"><NavIcon page="keluar" /></span>Keluar</button></li>
             </ul>
           </div>
         </div>
@@ -66,6 +84,7 @@ function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
   const submit = async (e: Event) => {
     e.preventDefault();
     setBusy(true); setError(null);
@@ -75,10 +94,14 @@ function Login() {
     <main class="login">
       <form class="login-card stack" onSubmit={submit}>
         <div class="login-brand"><span class="brand-mark" aria-hidden="true">M</span><h1>Panel MikroTik</h1></div>
-        <label>Kata sandi admin<input type="password" autocomplete="current-password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autofocus /></label>
+        <label>Kata sandi admin<span class="pw-field">
+          <input type={(show ? 'text' : 'password') as 'text'} autocomplete="current-password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autofocus />
+          <button type="button" class="ghost pw-eye" aria-pressed={show} aria-label={show ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'} onClick={() => setShow(v => !v)}>{show ? 'Sembunyikan' : 'Lihat'}</button>
+        </span></label>
         {sessionEnded.value && !error && <p class="notice" role="status">Sesi berakhir, silakan masuk lagi. Kamu akan kembali ke halaman yang tadi dibuka.</p>}
         <button type="submit" disabled={busy}>{busy ? 'Memeriksa…' : 'Masuk'}</button>
         {error && <p class="alert" role="alert">{error}</p>}
+        <p class="muted small login-help">Tampilan rusak setelah diubah agen? Masuk lewat <a href="/?design=default">mode darurat</a>. Lupa kata sandi? Jalankan <code>mikrotik-panel reset-password</code> di server.</p>
       </form>
     </main>
   );
@@ -244,11 +267,11 @@ function Shell() {
           <a class="brand" href="/" title="Panel MikroTik"><span class="brand-mark" aria-hidden="true">M</span><span class="brand-text">Panel MikroTik</span></a>
           <ul>
             {spec?.nav.items.map(item => (
-              <li key={item.page}><a href={`/${item.page}`} title={item.label} aria-current={page?.id === item.page ? 'page' : undefined}><span class="nav-icon" aria-hidden="true">{item.icon}</span><span class="nav-label">{item.label}</span></a></li>
+              <li key={item.page}><a href={`/${item.page}`} title={item.label} aria-current={page?.id === item.page ? 'page' : undefined}><span class="nav-icon" aria-hidden="true"><NavIcon page={item.page} fallback={item.icon} /></span><span class="nav-label">{item.label}</span></a></li>
             ))}
           </ul>
           <div class="nav-foot">
-            <button type="button" class="icon-btn" title="Keluar" aria-label="Keluar" onClick={() => void logout()}>⏻</button>
+            <button type="button" class="icon-btn" title="Keluar" aria-label="Keluar" onClick={() => void logout()}><NavIcon page="keluar" /></button>
           </div>
         </nav>
         <div class="main-col">
