@@ -22,7 +22,7 @@ button { font: inherit; cursor: pointer; }
 .draftbar > span { flex: 1 1 auto; }
 .draftactions { display: flex; gap: 8px; margin-left: auto; }
 .warn { color: var(--warn, #f5a524); }
-.log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; scroll-behavior: smooth; }
+.log { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 .intro h2 { font-size: 17px; margin: 8px 0 4px; } .intro p { color: var(--muted, #a1a1aa); margin: 0 0 10px; }
 .suggest { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 8px 10px; border-radius: var(--radius, 8px); border: 1px solid var(--border, #34343a); background: var(--bg, #18181b); color: inherit; }
 .suggest:hover { border-color: var(--accent, #f4f4f5); }
@@ -118,3 +118,32 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .topo .node.root rect { stroke: var(--accent, #f4f4f5); }
 .topo .node.down rect { stroke: var(--danger, #ff6166); }
 .topo .node.disabled text { fill: var(--muted, #a1a1aa); }
+
+/* Jawaban agen terstruktur: judul bertingkat, tabel, kutipan, garis, tautan. */
+.md > :last-child { margin-bottom: 0; }
+.md-heading { margin: 14px 0 6px; line-height: 1.3; letter-spacing: -.01em; }
+.md > .md-heading:first-child { margin-top: 0; }
+.md-heading.h1 { font-size: 17px; }
+.md-heading.h2 { font-size: 15.5px; padding-bottom: 4px; border-bottom: 1px solid var(--border, #34343a); }
+.md-heading.h3 { font-size: 14.5px; }
+.md-heading.h4 { font-size: 13px; color: var(--muted, #a1a1aa); text-transform: uppercase; letter-spacing: .04em; }
+.md li { margin: 2px 0; }
+.md li > ul, .md li > ol { margin: 2px 0 0; }
+.md li::marker { color: var(--muted, #a1a1aa); }
+.md strong { font-weight: 650; color: var(--text, #f4f4f5); }
+.md a { color: var(--accent, #f4f4f5); text-decoration: underline; text-underline-offset: 2px; }
+.md hr { border: 0; border-top: 1px solid var(--border, #34343a); margin: 12px 0; }
+.md blockquote { margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--accent, #f4f4f5); background: var(--surface-alt, #27272a); border-radius: 0 6px 6px 0; color: var(--muted, #a1a1aa); }
+.md blockquote p { margin: 0; }
+.md pre code { border: 0; }
+.md pre[data-lang]::before { content: attr(data-lang); display: block; font-size: 11px; color: var(--muted, #a1a1aa); margin-bottom: 4px; }
+.md-table { margin: 0 0 10px; overflow-x: auto; border: 1px solid var(--border, #34343a); border-radius: 6px; }
+.md-table table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+.md-table th, .md-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border, #34343a); vertical-align: top; }
+.md-table tr:last-child td { border-bottom: 0; }
+.md-table th { background: var(--surface-alt, #27272a); color: var(--muted, #a1a1aa); font-weight: 500; white-space: nowrap; }
+.md-table td { overflow-wrap: normal; word-break: normal; }
+
+/* Tombol lompat ke pesan terbaru saat admin menggulir ke atas. */
+.jump { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 10px); z-index: 2; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border, #34343a); background: var(--surface, #1f1f23); color: var(--text, #f4f4f5); font: inherit; font-size: 12.5px; cursor: pointer; box-shadow: 0 4px 16px rgb(0 0 0 / .4); }
+.jump:hover { background: var(--surface-alt, #27272a); }

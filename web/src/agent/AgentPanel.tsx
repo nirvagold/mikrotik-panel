@@ -82,6 +82,8 @@ export function AgentPanel() {
   // 'sending' = POST belum kembali; chat.done bisa tiba lebih dulu bila agen langsung gagal.
   const turnState = useRef<'idle' | 'sending' | 'running'>('idle');
   const lastSent = useRef('');
+  const stick = useRef(true);
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
   const running = runId !== null;
 
   async function loadConversations() {
@@ -92,6 +94,7 @@ export function AgentPanel() {
     try {
       const result = await get<{ messages: ChatMessage[]; proposals: ProposalCard[]; run_id: string | null }>(`/api/agent/conversations/${encodeURIComponent(id)}/messages`);
       if (id !== convRef.current) return;
+      if (!afterDone) stick.current = true; // buka percakapan = lihat pesan terbaru
       setMessages(result.messages);
       setProposals(result.proposals);
       // Setelah chat.done server bisa masih menandai run aktif beberapa milidetik; jangan
@@ -181,11 +184,35 @@ export function AgentPanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Auto-scroll saat ada isi baru, kecuali admin sedang menggulir ke atas.
+  // Auto-scroll ke pesan terbaru. Posisi "menempel di bawah" dicatat SEBELUM isi bertambah
+  // (lewat event scroll), jadi jawaban panjang/kartu besar yang masuk sekaligus tetap diikuti.
+  // Berhenti mengikuti hanya bila admin sendiri menggulir ke atas.
   useLayoutEffect(() => {
-    const el = log.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+    if (stick.current) toBottom();
   }, [messages, streaming, tools, proposals, question]);
+  // Saat panel dibuka/dipindah, mulai dari pesan terbaru (dulu tertahan di paling atas).
+  useLayoutEffect(() => {
+    if (!open) return;
+    stick.current = true;
+    toBottom();
+    // Kartu/grafik bisa menambah tinggi setelah frame pertama.
+    const t = requestAnimationFrame(() => { if (stick.current) toBottom(); });
+    return () => cancelAnimationFrame(t);
+  }, [open, docked]);
+
+  function toBottom() {
+    const el = log.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'instant' as ScrollBehavior });
+    setAwayFromBottom(false);
+  }
+
+  function onLogScroll() {
+    const el = log.current;
+    if (!el) return;
+    const away = el.scrollHeight - el.scrollTop - el.clientHeight > 80;
+    stick.current = !away;
+    setAwayFromBottom(away);
+  }
 
   // HP: keyboard layar tidak boleh mendorong chat ke atas. Popup layar penuh mengikuti
   // visualViewport (area yang benar-benar terlihat di atas keyboard), dan halaman di
@@ -255,6 +282,7 @@ export function AgentPanel() {
     const cut = replaceFrom ? messages.findIndex(m => m.id === replaceFrom) : -1;
     const mine: ChatMessage = { id: `local-${Date.now()}`, role: 'user', parts: [{ type: 'text', text: body }], design_version_id: null, created_at: Date.now() / 1000 };
     convRef.current = id;
+    stick.current = true;
     setConversation(id);
     setMessages([...(cut >= 0 ? messages.slice(0, cut) : messages), mine]);
     setProblem(''); setQuestion(null); setStreaming(''); setTools([]); setEditing(null);
@@ -417,7 +445,7 @@ export function AgentPanel() {
       )}
       {design.customCssDisabled.value && <div class="warn" role="alert">CSS khusus dimatikan sementara karena membuat teks sulit dibaca. Minta agen memperbaikinya, atau ketik /undo.</div>}
 
-      <div class="log" ref={log} role="log" aria-live="polite" aria-label="Percakapan dengan agen">
+      <div class="log" ref={log} onScroll={onLogScroll} role="log" aria-live="polite" aria-label="Percakapan dengan agen">
         {!visible.length && !running && (
           <div class="intro">
             <h2>Apa yang ingin Anda ubah?</h2>
@@ -445,6 +473,7 @@ export function AgentPanel() {
       </div>
 
       <form class="composer" onSubmit={e => { e.preventDefault(); void submit(); }}>
+        {awayFromBottom && visible.length > 0 && <button type="button" class="jump" onClick={() => { stick.current = true; toBottom(); }}>↓ Pesan terbaru</button>}
         {problem && <p class="problem" role="alert">{problem} <button type="button" class="link" onClick={() => setProblem('')}>Tutup</button></p>}
         {editing && <p class="editing-note">Mengedit pesan. Percakapan dan desain setelah pesan ini akan diganti. <button type="button" class="link" onClick={() => { setEditing(null); updateDraft(''); }}>Batal</button></p>}
         {slashHints.length > 0 && <ul class="slash">{slashHints.map(([cmd, help]) =>

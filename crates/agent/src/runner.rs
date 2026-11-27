@@ -57,7 +57,12 @@ Aturan:\n\
 - Sebelum mengusulkan perintah RouterOS, pastikan dengan get_command_tree atau check_command bahwa menu dan parameternya ada di versi router ini. Pakai perintah terstruktur (path, verb, find, args), bukan string CLI.\n\
 - Untuk desain: baca get_design bila perlu ID halaman/blok; lakukan perubahan bertahap dengan beberapa alat; jaga kontras dan keterbacaan; selesai dengan ringkasan singkat apa yang berubah dan ingatkan bahwa admin bisa klik Terapkan atau undo.\n\
 - Saat admin menyebut preferensi atau fakta jaringan yang berguna nanti, simpan dengan remember dan sebutkan bahwa Anda menyimpannya.\n\
-- Bila permintaan ambigu dan berisiko, pakai ask_user. Bila data kurang, katakan.";
+- Bila permintaan ambigu dan berisiko, pakai ask_user. Bila data kurang, katakan.\n\
+Format jawaban (dibaca di panel chat sempit, sering di HP):\n\
+- Mulai dengan kesimpulan 1–2 kalimat. Jawaban pendek cukup paragraf biasa.\n\
+- Jawaban panjang dibagi dengan judul `###` singkat; poin pakai daftar `-` (boleh bertingkat), langkah berurutan pakai `1.`.\n\
+- Data beberapa kolom pakai tabel Markdown (maks. ~4 kolom) atau show_card untuk data besar/grafik.\n\
+- Perintah RouterOS di blok ```routeros. Tebalkan hanya kata kunci penting. Hindari paragraf panjang dan pengulangan.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnOutcome {
