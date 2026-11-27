@@ -91,6 +91,12 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX agent_proposals_conv ON agent_proposals(conversation_id, created_at);
     "#,
+    // v3: sesi login bertahan saat panel restart (hanya hash token yang disimpan).
+    r#"
+    CREATE TABLE admin_sessions (
+        token_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL
+    ) WITHOUT ROWID;
+    "#,
 ];
 
 #[derive(Clone)]

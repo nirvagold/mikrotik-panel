@@ -39,7 +39,7 @@ fn int(min: i64, max: i64, desc: &str) -> Json {
     json!({"type": "integer", "minimum": min, "maximum": max, "description": desc})
 }
 
-const BLOCK_DOC: &str = "Blok: {id, span, kind, props}. kind: metrics{items:[customers_online|customers_total|low_quota|cpu|memory|uptime|traffic_today|temperature]}, traffic_chart{days:7|14|30, account?}, customer_table{title, filter:all|online|offline|low_quota, columns:[name|status|address|profile|used|remaining|limit|uptime|actions], row_limit}, low_quota{limit}, router_status{}, topology{}, logs{topics, limit}, recommendations{limit}, action_button{action_id, label?}, text{markdown}, builtin{name:customer_detail|audit|agent|agent_memory|ai_settings|actions}.";
+const BLOCK_DOC: &str = "Blok: {id, span, kind, props}. kind: metrics{items:[customers_online|customers_total|low_quota|cpu|memory|uptime|traffic_today|temperature]}, traffic_chart{days:7|14|30, account?}, customer_table{title, filter:all|online|offline|low_quota, columns:[name|status|address|profile|used|remaining|limit|uptime|actions], row_limit}, low_quota{limit}, router_status{}, topology{}, logs{topics, limit}, recommendations{limit}, action_button{action_id, label?}, text{markdown}, builtin{name:customer_detail|audit|agent|agent_memory|ai_settings|actions|settings} (settings = halaman Pengaturan bertab: panel, router, AI, memori, tampilan; wajib ada).";
 
 fn command_schema() -> Json {
     json!({"type": "object", "description": "Perintah RouterOS terstruktur. Contoh: {\"path\":[\"ppp\",\"active\"],\"verb\":\"remove\",\"find\":{\"name\":\"budi\"}}. Placeholder tombol: {\"param\":\"nama\"} atau {\"param\":\"gib\",\"multiply\":1073741824}.",

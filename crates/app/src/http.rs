@@ -43,6 +43,9 @@ pub fn app(state: Shared) -> Router {
         .route("/api/session", get(session_info))
         .route("/api/version", get(version_info))
         .route("/api/update/request", post(update_request))
+        .route("/api/update/notes", get(update_notes))
+        .route("/api/settings/panel", get(panel_settings))
+        .route("/api/settings/password", post(change_password))
         .route("/api/events", get(events))
         .merge(crate::api::routes())
         .merge(crate::agent_api::routes())
@@ -141,14 +144,14 @@ async fn login(
 ) -> Response {
     let forwarded = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let ip = auth::client_ip(peer.ip(), forwarded, &state.config.trusted_proxies);
-    if let Some(wait) = state.limiter.locked(ip) {
+    if let Err(wait) = state.limiter.begin(ip) {
         let minutes = wait.as_secs().div_ceil(60);
         return error(
             StatusCode::TOO_MANY_REQUESTS,
             &format!("Terlalu banyak percobaan. Coba lagi dalam {minutes} menit."),
         );
     }
-    let hash = state.config.admin_password_hash.clone();
+    let hash = admin_hash(&state).await;
     let password = body.password;
     let ok = tokio::task::spawn_blocking(move || crypto::verify_password(&password, &hash))
         .await
@@ -165,11 +168,27 @@ async fn login(
         })
         .await;
     if !ok {
-        state.limiter.failed(ip);
+        // Percobaan ini sudah dihitung oleh `begin`.
         return error(StatusCode::UNAUTHORIZED, "Kata sandi salah.");
     }
     state.limiter.succeeded(ip);
-    let (token, csrf) = state.sessions.create();
+    let session = state.sessions.create_new();
+    let (hash, csrf_db, expires) = (session.hash.clone(), session.csrf.clone(), session.expires as i64);
+    // Disimpan supaya admin tidak keluar sendiri saat panel di-update atau restart.
+    if let Err(e) = state
+        .store
+        .run(move |c| {
+            c.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [crate::store::now()])?;
+            c.execute(
+                "INSERT OR REPLACE INTO admin_sessions (token_hash, csrf, expires_at) VALUES (?1, ?2, ?3)",
+                (hash, csrf_db, expires),
+            )
+        })
+        .await
+    {
+        tracing::warn!("sesi tidak tersimpan ke database: {e}");
+    }
+    let (token, csrf) = (session.token, session.csrf);
     let secure = if state.config.cookie_secure {
         "; Secure"
     } else {
@@ -190,6 +209,11 @@ async fn login(
 async fn logout(State(state): State<Shared>, headers: HeaderMap) -> Response {
     if let Some(token) = cookie_value(&headers, SESSION_COOKIE) {
         state.sessions.remove(&token);
+        let hash = auth::token_hash(&token);
+        let _ = state
+            .store
+            .run(move |c| c.execute("DELETE FROM admin_sessions WHERE token_hash = ?1", [hash]))
+            .await;
     }
     let mut res = StatusCode::NO_CONTENT.into_response();
     res.headers_mut().insert(
@@ -279,6 +303,135 @@ pub async fn request_update(action: &str) -> Result<(), (StatusCode, String)> {
 }
 
 /// Isi status.json pembaru, atau None bila pembaru belum terpasang.
+/// Hash kata sandi admin yang berlaku: yang diganti lewat panel (database) atau dari config.
+async fn admin_hash(state: &Shared) -> String {
+    state
+        .store
+        .run(|c| c.query_row("SELECT value FROM settings WHERE key = 'admin_password_hash'", [], |r| r.get::<_, String>(0)))
+        .await
+        .unwrap_or_else(|_| state.config.admin_password_hash.clone())
+}
+
+async fn panel_settings(State(state): State<Shared>) -> Response {
+    let c = &state.config;
+    Json(json!({
+        "version": crate::VERSION,
+        "session_hours": c.session_hours,
+        "router": { "host": c.router.host, "port": c.router.port, "user": c.router.user, "tls": c.router.tls },
+        "poll_seconds": c.router.poll_seconds,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct PasswordBody {
+    current: String,
+    new: String,
+}
+
+/// Ganti kata sandi admin dari panel. Disimpan (sebagai hash Argon2) di database dan
+/// menggantikan admin_password_hash di config. Sesi lain dikeluarkan.
+async fn change_password(State(state): State<Shared>, headers: HeaderMap, Json(b): Json<PasswordBody>) -> Response {
+    let Some(_busy) = crate::inflight::claim("change-password") else {
+        return error(StatusCode::CONFLICT, "Penggantian kata sandi sedang diproses.");
+    };
+    if b.new.chars().count() < 10 {
+        return error(StatusCode::BAD_REQUEST, "Kata sandi baru minimal 10 karakter.");
+    }
+    if b.new == b.current {
+        return error(StatusCode::BAD_REQUEST, "Kata sandi baru harus berbeda dari yang lama.");
+    }
+    let hash = admin_hash(&state).await;
+    let (current, new) = (b.current, b.new);
+    let result = tokio::task::spawn_blocking(move || {
+        if !crypto::verify_password(&current, &hash) {
+            return Err("Kata sandi sekarang salah.");
+        }
+        crypto::hash_password(&new).map_err(|_| "Gagal membuat hash kata sandi.")
+    })
+    .await
+    .unwrap_or(Err("Gagal memeriksa kata sandi."));
+    let new_hash = match result {
+        Ok(h) => h,
+        Err(m) => return error(StatusCode::FORBIDDEN, m),
+    };
+    let token = cookie_value(&headers, SESSION_COOKIE).unwrap_or_default();
+    let keep = auth::token_hash(&token);
+    let saved = state
+        .store
+        .run(move |c| {
+            c.execute(
+                "INSERT INTO settings (key, value) VALUES ('admin_password_hash', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [new_hash],
+            )?;
+            c.execute("DELETE FROM admin_sessions WHERE token_hash <> ?1", [keep])
+        })
+        .await;
+    if let Err(e) = saved {
+        tracing::error!("kata sandi baru gagal disimpan: {e}");
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "Kata sandi baru gagal disimpan.");
+    }
+    state.sessions.retain_only(&token);
+    let (id, at) = (crypto::random_token(), crate::store::now());
+    let _ = state
+        .store
+        .run(move |c| c.execute(
+            "INSERT INTO audit (id, at, actor, account, action, before, after, status) VALUES (?1, ?2, 'admin', NULL, 'panel.password', NULL, 'kata sandi admin diganti', 'Berhasil')",
+            (id, at),
+        ))
+        .await;
+    Json(json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct NotesQuery {
+    tag: String,
+}
+
+/// Catatan rilis dari GitHub untuk satu tag (disimpan sementara di memori).
+async fn update_notes(axum::extract::Query(q): axum::extract::Query<NotesQuery>) -> Response {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    let tag = q.tag.trim().to_string();
+    if tag.is_empty() || tag.len() > 32 || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+        return error(StatusCode::BAD_REQUEST, "Tag rilis tidak valid.");
+    }
+    if let Some(text) = CACHE.lock().unwrap().as_ref().and_then(|c| c.get(&tag).cloned()) {
+        return Json(json!({ "tag": tag, "notes": text })).into_response();
+    }
+    let url = format!("https://api.github.com/repos/{RELEASE_REPO}/releases/tags/{tag}");
+    let fetched = async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("mikrotik-panel")
+            .build()?;
+        let v: serde_json::Value = client
+            .get(&url)
+            .header("accept", "application/vnd.github+json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok::<_, reqwest::Error>(v["body"].as_str().unwrap_or("").chars().take(4000).collect::<String>())
+    }
+    .await;
+    match fetched {
+        Ok(text) => {
+            CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(tag.clone(), text.clone());
+            Json(json!({ "tag": tag, "notes": text })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("catatan rilis {tag} gagal dibaca: {e}");
+            error(StatusCode::BAD_GATEWAY, "Catatan rilis belum bisa dibaca dari GitHub.")
+        }
+    }
+}
+
+/// Repo rilis (sama dengan REPO di deploy/update.sh).
+const RELEASE_REPO: &str = "nirvagold/mikrotik-panel";
+
 pub async fn read_update_status() -> Option<serde_json::Value> {
     let path = std::env::var("PANEL_UPDATE_STATUS").unwrap_or_else(|_| UPDATE_STATUS.into());
     tokio::fs::read_to_string(path)
@@ -307,7 +460,10 @@ async fn health(State(state): State<Shared>) -> Response {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    let body = json!({ "ok": db_ok, "version": crate::VERSION, "database": { "ok": db_ok }, "router": router });
+    // "busy": ada top-up, jawaban agen, atau perintah yang sedang berjalan. Pembaru menunggu
+    // sampai false sebelum me-restart panel, supaya pekerjaan admin tidak terputus.
+    let busy = crate::inflight::any() || state.quota.busy() || state.runs.current_conversation().is_some();
+    let body = json!({ "ok": db_ok, "version": crate::VERSION, "busy": busy, "database": { "ok": db_ok }, "router": router });
     (status, Json(body)).into_response()
 }
 

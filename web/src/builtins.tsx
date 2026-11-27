@@ -1,4 +1,5 @@
 // Blok bawaan: halaman yang isinya tetap (detail pelanggan, riwayat, pengaturan AI, memori agen).
+import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import type { Block } from './agent';
 import { get, post, put } from './api';
@@ -16,13 +17,26 @@ export function Builtin({ block }: Props) {
     case 'audit': return <Audit />;
     case 'ai_settings': return <AiSettings />;
     case 'agent_memory': return <AgentMemory />;
-    case 'agent': return <p class="muted">Panel agen ada di sisi kanan layar. Tulis permintaan di sana, misalnya “buat tema gelap” atau “siapa yang kuotanya hampir habis?”.</p>;
+    case 'agent': return <p class="muted">Agen AI dibuka lewat tombol ✦ (di HP: tombol tengah menu bawah). Tulis permintaan di sana, misalnya “siapa yang kuotanya hampir habis?”.</p>;
     case 'actions': return <Actions />;
+    case 'settings': return <Settings />;
     default: return <p class="muted">Blok bawaan “{block.props.name}” belum tersedia.</p>;
   }
 }
 
 type Op = { id: string; account: string; profile: string; limitation: string; field: string; before: number; after: number };
+
+const QUICK_GIB = [5, 10, 20, 50];
+
+/** Kenapa top-up tidak bisa, dalam bahasa awam, plus jalan keluarnya. */
+function whyNotEditable(c: Customer): string {
+  if (!c.profile) return 'Pelanggan ini tidak punya tepat satu profil aktif di User Manager, jadi panel tidak tahu batas kuota mana yang harus ditambah.';
+  if (!c.limitation) return `Profil ${c.profile} tidak punya batas kuota (limitation), jadi tidak ada kuota yang bisa ditambah.`;
+  if (!c.field) return 'Batas kuota pelanggan ini memakai lebih dari satu jenis batas (unduh/unggah/total), jadi panel tidak tahu mana yang harus ditambah.';
+  return `Batas kuota ${c.limitation} dipakai bersama profil atau pelanggan lain. Menambahnya akan ikut menambah kuota mereka juga, jadi panel tidak mengubahnya.`;
+}
+
+type Pending = { kind: 'disconnect' | 'disable' | 'enable' | 'profile'; text: string };
 
 function CustomerDetail() {
   const account = query.value.get('akun');
@@ -31,94 +45,224 @@ function CustomerDetail() {
   const [amount, setAmount] = useState('10');
   const [op, setOp] = useState<Op | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [logs, setLogs] = useState<Record<string, string>[] | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [profiles, setProfiles] = useState<string[] | null>(null);
+  const [newProfile, setNewProfile] = useState('');
 
   const load = () => {
     if (!account) return;
-    get<typeof data>(`/api/customers/${encodeURIComponent(account)}?days=30`).then(d => { setData(d); setError(null); }).catch(e => setError(e.message));
+    const want = account;
+    // Jawaban yang datang terlambat untuk pelanggan sebelumnya diabaikan, supaya tombol top-up
+    // tidak pernah mengarah ke pelanggan yang salah.
+    const still = () => query.value.get('akun') === want;
+    get<typeof data>(`/api/customers/${encodeURIComponent(want)}?days=30`)
+      .then(d => { if (still()) { setData(d); setError(null); } })
+      .catch(e => { if (still()) setError(e.message); });
   };
-  useEffect(() => { setData(null); setOp(null); setNotice(null); setLogs(null); load(); return account ? on('telemetry.update', load) : undefined; }, [account]);
+  useEffect(() => {
+    setData(null); setOp(null); setNotice(null); setLogs(null); setPending(null); setNewProfile('');
+    load();
+    return account ? on('telemetry.update', load) : undefined;
+  }, [account]);
+  // Esc menutup panel detail.
+  useEffect(() => {
+    if (!account) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) close(); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [account, busy]);
 
-  if (!account) return <p class="muted">Pilih pelanggan di tabel untuk melihat detail dan menambah kuota.</p>;
-  if (error) return <p class="alert">{error}</p>;
-  if (!data) return <p class="muted">Memuat {account}…</p>;
+  const close = () => navigate(location.pathname);
+  if (!account) return <p class="muted small">Ketuk nama pelanggan untuk melihat detail, menambah kuota, atau memutus sesi.</p>;
+
+  const frame = (body: ComponentChildren) => (
+    <div class="drawer-backdrop" onClick={() => { if (!busy) close(); }}>
+      <div class="drawer" role="dialog" aria-modal="true" aria-label={`Detail ${account}`} onClick={e => e.stopPropagation()}>
+        <span class="sheet-grip" aria-hidden="true" />
+        {body}
+      </div>
+    </div>
+  );
+  if (error) return frame(<><div class="block-head"><h2 class="block-title">{account}</h2><button type="button" class="ghost" onClick={close}>Tutup</button></div><p class="alert">{error}</p></>);
+  if (!data || data.customer.name !== account) return frame(<p class="muted">Memuat {account}…</p>);
   const c = data.customer;
+  const url = (tail: string) => `/api/customers/${encodeURIComponent(c.name)}/${tail}`;
 
-  const preview = async (e: Event) => {
-    e.preventDefault();
+  const preview = async (gibs: number) => {
     setBusy(true); setNotice(null);
-    try { setOp(await post<Op>(`/api/customers/${encodeURIComponent(c.name)}/quota/preview`, { amount_gib: Number(amount) })); }
-    catch (err) { setNotice((err as Error).message); }
+    try { setOp(await post<Op>(url('quota/preview'), { amount_gib: gibs })); }
+    catch (err) { setNotice({ ok: false, text: (err as Error).message }); }
     finally { setBusy(false); }
   };
   const apply = async () => {
     if (!op) return;
     setBusy(true);
     try {
-      const r = await post<{ status: string }>(`/api/customers/${encodeURIComponent(c.name)}/quota/apply`, { id: op.id });
-      setNotice(r.status === 'Terverifikasi' ? 'Kuota baru sudah dikonfirmasi oleh User Manager.' : `${r.status}. Baca ulang profil sebelum mencoba lagi.`);
+      const r = await post<{ status: string }>(url('quota/apply'), { id: op.id });
+      setNotice(r.status === 'Terverifikasi'
+        ? { ok: true, text: `Kuota ${c.name} sekarang ${gib(op.after)} (sudah dicek di User Manager).` }
+        : { ok: false, text: `${r.status}. Buka ulang detail ini lalu coba lagi.` });
       setOp(null);
       load();
       void refreshDashboard();
-    } catch (err) { setNotice((err as Error).message); }
+    } catch (err) { setNotice({ ok: false, text: (err as Error).message }); }
     finally { setBusy(false); }
   };
+  const ask = (p: Pending) => { setNotice(null); setPending(p); };
+  const confirm = async () => {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      const r = pending.kind === 'disconnect' ? await post<{ message: string }>(url('disconnect'))
+        : pending.kind === 'profile' ? await post<{ message: string }>(url('profile'), { profile: newProfile })
+        : await post<{ message: string }>(url('enabled'), { enabled: pending.kind === 'enable' });
+      setNotice({ ok: true, text: r.message });
+      setPending(null); setNewProfile('');
+      void refreshDashboard();
+      setTimeout(load, 1500);
+    } catch (err) { setNotice({ ok: false, text: (err as Error).message }); }
+    finally { setBusy(false); }
+  };
+  const openProfiles = () => {
+    if (profiles) return;
+    get<{ profiles: string[] }>('/api/profiles').then(r => setProfiles(r.profiles)).catch(e => setNotice({ ok: false, text: e.message }));
+  };
+  const askAgent = (text: string) => window.dispatchEvent(new CustomEvent('agent:prefill', { detail: text }));
 
-  return (
+  return frame(
     <div class="detail">
       <div class="block-head">
         <h2 class="block-title">{c.name}</h2>
-        <button type="button" class="ghost" onClick={() => navigate(location.pathname)}>Tutup</button>
+        <button type="button" class="ghost" onClick={close} disabled={busy}>Tutup</button>
       </div>
       <dl class="facts">
         <dt>Status</dt><dd>{c.disabled ? 'nonaktif' : c.online ? `online, ${c.address ?? ''} (${c.uptime ?? ''})` : 'offline'}</dd>
         <dt>Profil</dt><dd>{c.profile ?? '—'}</dd>
-        <dt>Batas kuota</dt><dd>{gib(c.limit)} {c.field ? `(${c.field})` : ''}</dd>
-        <dt>Terpakai siklus ini</dt><dd>{gib(c.used)}{c.cycle_start ? ` sejak ${c.cycle_start}` : ''}</dd>
+        <dt>Batas kuota</dt><dd>{gib(c.limit)}</dd>
+        <dt>Terpakai</dt><dd>{gib(c.used)}{c.cycle_start ? ` sejak ${c.cycle_start}` : ''}</dd>
         <dt>Sisa</dt><dd>{c.approximate ? 'perkiraan (sesi melintasi awal siklus)' : gib(c.remaining)}</dd>
       </dl>
-      <h3 class="sub-title">Trafik 30 hari</h3>
-      <TrafficBars history={data.history} />
-      <h3 class="sub-title">Tambah kuota</h3>
-      {!c.editable ? <p class="muted">Top-up hanya untuk profil dengan satu batas kuota khusus pelanggan ini.</p> : op ? (
+
+      <h3 class="sub-title">Tindakan</h3>
+      {pending ? (
         <div class="confirm">
-          <p>Batas {op.field} untuk <strong>{op.account}</strong> berubah dari <strong>{gib(op.before)}</strong> menjadi <strong>{gib(op.after)}</strong>.</p>
-          <div class="row"><button type="button" onClick={apply} disabled={busy}>Terapkan</button><button type="button" class="ghost" onClick={() => setOp(null)} disabled={busy}>Batal</button></div>
+          <p>{pending.text}</p>
+          <div class="row"><button type="button" class="danger" onClick={confirm} disabled={busy}>{busy ? 'Memproses…' : 'Ya, lanjutkan'}</button><button type="button" class="ghost" onClick={() => setPending(null)} disabled={busy}>Batal</button></div>
         </div>
       ) : (
-        <form class="row" onSubmit={preview}>
-          <label>Tambah <input type="number" min={1} max={1000} value={amount} onInput={e => setAmount((e.target as HTMLInputElement).value)} required /> GiB</label>
-          <button type="submit" disabled={busy}>Pratinjau</button>
-        </form>
+        <div class="row">
+          <button type="button" class="ghost" disabled={busy || !c.online} title={c.online ? undefined : 'Pelanggan sedang offline'} onClick={() => ask({ kind: 'disconnect', text: `Putus sesi ${c.name} sekarang? Pelanggan bisa langsung tersambung lagi.` })}>Putus sesi</button>
+          {c.disabled
+            ? <button type="button" class="ghost" disabled={busy} onClick={() => ask({ kind: 'enable', text: `Aktifkan lagi ${c.name}?` })}>Aktifkan</button>
+            : <button type="button" class="ghost" disabled={busy} onClick={() => ask({ kind: 'disable', text: `Nonaktifkan ${c.name}? Sesinya ikut diputus dan ia tidak bisa tersambung sampai diaktifkan lagi.` })}>Nonaktifkan</button>}
+          <select aria-label="Ganti profil" value={newProfile} onFocus={openProfiles} onPointerDown={openProfiles}
+            onChange={e => { const v = (e.target as HTMLSelectElement).value; setNewProfile(v); if (v) ask({ kind: 'profile', text: `Ganti profil ${c.name} dari ${c.profile ?? 'tanpa profil'} ke ${v}? Berlaku saat pelanggan tersambung ulang.` }); }}>
+            <option value="">{profiles ? 'Ganti profil…' : 'Ganti profil… (memuat)'}</option>
+            {(profiles ?? []).filter(p => p !== c.profile).map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
       )}
-      {notice && <p class="notice">{notice}</p>}
+
+      <h3 class="sub-title">Tambah kuota</h3>
+      {!c.editable ? (
+        <div class="muted small stack">
+          <p>{whyNotEditable(c)}</p>
+          <p><button type="button" class="link-btn" onClick={() => askAgent(`Buatkan batas kuota khusus untuk pelanggan ${c.name} supaya bisa di-top-up dari panel.`)}>Minta agen membuatkan batas kuota khusus</button></p>
+        </div>
+      ) : op ? (
+        <div class="confirm">
+          <p>Kuota <strong>{op.account}</strong> berubah dari <strong>{gib(op.before)}</strong> menjadi <strong>{gib(op.after)}</strong>.</p>
+          <div class="row"><button type="button" onClick={apply} disabled={busy}>{busy ? 'Menerapkan…' : 'Terapkan'}</button><button type="button" class="ghost" onClick={() => setOp(null)} disabled={busy}>Batal</button></div>
+        </div>
+      ) : (
+        <div class="stack">
+          <div class="row" role="group" aria-label="Tambah cepat">
+            {QUICK_GIB.map(n => <button key={n} type="button" class="ghost" disabled={busy} onClick={() => void preview(n)}>+{n} GiB</button>)}
+          </div>
+          <form class="row" onSubmit={e => { e.preventDefault(); void preview(Number(amount)); }}>
+            <label>Jumlah lain <input type="number" min={1} max={1000} value={amount} onInput={e => setAmount((e.target as HTMLInputElement).value)} required /> GiB</label>
+            <button type="submit" disabled={busy}>{busy ? 'Memeriksa…' : 'Pratinjau'}</button>
+          </form>
+        </div>
+      )}
+      {notice && <p class={notice.ok ? 'notice' : 'alert'} role="status">{notice.text}</p>}
+
+      <h3 class="sub-title">Trafik 30 hari</h3>
+      <TrafficBars history={data.history} />
       <h3 class="sub-title">Log PPPoE</h3>
       {logs ? (logs.length ? <ol class="log-list">{logs.map((l, i) => <li key={i}><time>{l.time}</time> {l.message}</li>)}</ol> : <p class="muted">Tidak ada log untuk akun ini.</p>)
-        : <button type="button" class="ghost" onClick={() => get<{ logs: Record<string, string>[] }>(`/api/customers/${encodeURIComponent(c.name)}/logs`).then(r => setLogs(r.logs)).catch(e => setNotice(e.message))}>Muat log</button>}
+        : <button type="button" class="ghost" onClick={() => get<{ logs: Record<string, string>[] }>(url('logs')).then(r => setLogs(r.logs)).catch(e => setNotice({ ok: false, text: e.message }))}>Muat log</button>}
     </div>
   );
 }
 
 type AuditRow = { id: string; at: number; actor: string; account: string | null; action: string; before: string | null; after: string | null; status: string };
 
+const ACTION_LABELS: Record<string, string> = {
+  'quota.increase': 'Top-up kuota', 'customer.disconnect': 'Putus sesi', 'customer.enabled': 'Aktif/nonaktif pelanggan',
+  'customer.profile': 'Ganti profil', 'recommendation.accept': 'Terapkan saran', 'action.revert': 'Kembalikan tombol aksi',
+  'agent.topup_quota': 'Top-up kuota (agen)', 'agent.disconnect_session': 'Putus sesi (agen)', 'agent.set_customer_enabled': 'Aktif/nonaktif (agen)',
+  'agent.set_customer_profile': 'Ganti profil (agen)', 'agent.set_radius_user': 'Atribut RADIUS (agen)', 'agent.reboot_router': 'Reboot router (agen)',
+  'agent.create_action_button': 'Buat tombol aksi (agen)', 'agent.update_action_button': 'Ubah tombol aksi (agen)',
+  'agent.delete_action_button': 'Hapus tombol aksi (agen)', 'agent.run_action_button': 'Jalankan tombol (agen)',
+  'agent.revert_action_run': 'Kembalikan tombol (agen)', 'agent.install_update': 'Pasang update (agen)', 'agent.revert_service': 'Kembalikan IP Services',
+  'agent.run_command': 'Perintah router (agen)',
+};
+const STATUS_LABELS: Record<string, string> = { done: 'berhasil', failed: 'gagal', partial: 'gagal sebagian', Terverifikasi: 'berhasil' };
+const ACTOR_LABELS: Record<string, string> = { admin: 'Admin', agent: 'Agen AI' };
+
+function actionLabel(a: string): string {
+  if (ACTION_LABELS[a]) return ACTION_LABELS[a];
+  if (a.startsWith('action.')) return `Tombol: ${a.slice(7)}`;
+  if (a.startsWith('agent.')) return `${a.slice(6).replace(/_/g, ' ')} (agen)`;
+  return a;
+}
+
 function Audit() {
   const [rows, setRows] = useState<AuditRow[] | null>(null);
-  useEffect(() => { get<{ audit: AuditRow[] }>('/api/audit').then(r => setRows(r.audit)).catch(() => setRows([])); }, []);
-  if (!rows) return <p class="muted">Memuat riwayat…</p>;
-  const show = (r: AuditRow, v: string | null) => v && r.action === 'quota.increase' ? gib(Number(v)) : (v ?? '—');
+  const [account, setAccount] = useState('');
+  const [more, setMore] = useState(true);
+  const fetchRows = (before?: number) => {
+    const q = new URLSearchParams();
+    if (account.trim()) q.set('account', account.trim());
+    if (before) q.set('before', String(before));
+    return get<{ audit: AuditRow[] }>(`/api/audit?${q}`).then(r => { setMore(r.audit.length === 100); return r.audit; });
+  };
+  useEffect(() => {
+    const t = setTimeout(() => { fetchRows().then(setRows).catch(() => setRows([])); }, 250);
+    return () => clearTimeout(t);
+  }, [account]);
+  const show = (r: AuditRow, v: string | null) => v && r.action === 'quota.increase' ? gib(Number(v)) : (v ?? '');
+  const change = (r: AuditRow) => {
+    const b = show(r, r.before), a = show(r, r.after);
+    return b && a ? `${b} → ${a}` : a || b || '—';
+  };
   return (
     <div>
-      <h2 class="block-title">Riwayat perubahan</h2>
-      {rows.length === 0 ? <p class="muted">Belum ada perubahan.</p> : (
-        <div class="table-wrap"><table>
-          <thead><tr><th>Waktu</th><th>Oleh</th><th>Tindakan</th><th>Pelanggan</th><th>Sebelum</th><th>Sesudah</th><th>Status</th></tr></thead>
-          <tbody>{rows.map(r => <tr key={r.id}><td>{dateTime(r.at)}</td><td>{r.actor}</td><td>{r.action}</td><td>{r.account ?? '—'}</td><td>{show(r, r.before)}</td><td>{show(r, r.after)}</td><td>{r.status}</td></tr>)}</tbody>
-        </table></div>
+      <div class="block-head">
+        <h2 class="block-title">Riwayat perubahan</h2>
+        <input class="search" type="search" placeholder="Saring nama pelanggan" value={account} onInput={e => setAccount((e.target as HTMLInputElement).value)} aria-label="Saring riwayat per pelanggan" />
+      </div>
+      {!rows ? <p class="muted">Memuat riwayat…</p> : rows.length === 0 ? <p class="muted">Belum ada perubahan{account.trim() ? ` untuk ${account.trim()}` : ''}.</p> : (
+        <>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Waktu</th><th>Oleh</th><th>Tindakan</th><th>Pelanggan</th><th>Perubahan</th><th>Hasil</th></tr></thead>
+            <tbody>{rows.map(r => <tr key={r.id}><td>{dateTime(r.at)}</td><td>{ACTOR_LABELS[r.actor] ?? r.actor}</td><td>{actionLabel(r.action)}</td><td>{r.account ?? '—'}</td><td class="audit-change">{change(r)}</td><td>{STATUS_LABELS[r.status] ?? r.status}</td></tr>)}</tbody>
+          </table></div>
+          {more && <p><button type="button" class="ghost" onClick={() => fetchRows(rows[rows.length - 1].at).then(next => setRows([...rows, ...next])).catch(() => setMore(false))}>Muat lebih banyak</button></p>}
+        </>
       )}
     </div>
   );
 }
+
+const PROVIDERS = [
+  { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com/v1', protocol: 'openai', model: 'deepseek-chat' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', url: 'https://api.anthropic.com/v1', protocol: 'anthropic', model: '' },
+  { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1', protocol: 'openai', model: '' },
+];
 
 function AiSettings() {
   const [form, setForm] = useState({ url: '', protocol: 'anthropic', model: '', api_key: '', thinking: 'high' });
@@ -131,7 +275,7 @@ function AiSettings() {
     try {
       const r = await post<{ models: { id: string; name: string }[] }>('/api/settings/ai/models', { url: form.url, protocol: form.protocol, api_key: form.api_key || null });
       setModels(r.models);
-      setNotice(`${r.models.length} model ditemukan. Pilih salah satu, lalu Simpan.`);
+      setNotice(`Koneksi berhasil: ${r.models.length} model ditemukan. Pilih salah satu, lalu Simpan.`);
     } catch (err) { setModels(null); setNotice((err as Error).message); }
     finally { setFetching(false); }
   };
@@ -142,6 +286,12 @@ function AiSettings() {
     }).catch(e => setNotice(e.message));
   }, []);
   const set = (k: keyof typeof form) => (e: Event) => setForm({ ...form, [k]: (e.target as HTMLInputElement).value });
+  const provider = PROVIDERS.find(p => p.url === form.url && p.protocol === form.protocol)?.id ?? 'custom';
+  const pickProvider = (id: string) => {
+    const p = PROVIDERS.find(x => x.id === id);
+    setModels(null);
+    if (p) setForm({ ...form, url: p.url, protocol: p.protocol, model: form.model && provider === id ? form.model : p.model });
+  };
   const save = async (e: Event) => {
     e.preventDefault();
     try {
@@ -152,12 +302,18 @@ function AiSettings() {
   return (
     <form class="stack" onSubmit={save}>
       <h2 class="block-title">Pengaturan AI</h2>
-      <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
-      <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
+      <label>Penyedia<select value={provider} onChange={e => pickProvider((e.target as HTMLSelectElement).value)}>
+        {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+        <option value="custom">Lainnya (isi sendiri)</option>
+      </select></label>
+      {provider === 'custom' && <>
+        <label>Protokol<select value={form.protocol} onChange={set('protocol')}><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI-compatible</option></select></label>
+        <label>Endpoint (https)<input type="url" value={form.url} onInput={set('url')} required /></label>
+      </>}
       <label>API key<input type="password" autocomplete="off" value={form.api_key} onInput={set('api_key')} placeholder={hasKey ? 'Tersimpan; kosongkan untuk tetap memakai key lama' : ''} /></label>
       <label>Model<span class="row">
         <input style={{ flex: 1, minWidth: 0 }} value={form.model} onInput={set('model')} required maxLength={150} placeholder="Ketik, atau tekan Ambil model" />
-        <button type="button" class="ghost" onClick={() => void fetchModels()} disabled={fetching || !form.url}>{fetching ? 'Mengambil…' : 'Ambil model'}</button>
+        <button type="button" class="ghost" onClick={() => void fetchModels()} disabled={fetching || !form.url} title="Sekaligus menguji koneksi dan API key">{fetching ? 'Menguji…' : 'Tes & ambil model'}</button>
       </span></label>
       {models && models.length > 0 && <label>Model dari endpoint<select value={models.some(m => m.id === form.model) ? form.model : ''} onChange={e => setForm({ ...form, model: (e.target as HTMLSelectElement).value })}>
         <option value="" disabled>Pilih model…</option>
@@ -207,6 +363,137 @@ function Actions() {
       {rows.length === 0 ? <p class="muted">Belum ada tombol aksi. Minta agen membuatnya, misalnya “buat tombol putus sesi PPPoE pelanggan”.</p> : (
         <ul class="plain-list action-list">{rows.map(a => <li key={a.id}><ActionButton block={{ id: a.id, span: 1, kind: 'action_button', props: { action_id: a.id, label: a.label } } as never} /> <span class={`badge ${a.risk === 'critical' ? 'off' : 'idle'}`}>{({ read: 'baca', write: 'ubah', critical: 'kritis' } as Record<string, string>)[a.risk] ?? a.risk}</span></li>)}</ul>
       )}
+    </div>
+  );
+}
+
+// ---------- Pengaturan (Paket D) ----------
+
+const TABS: [string, string][] = [['panel', 'Panel'], ['router', 'Router'], ['ai', 'AI'], ['memori', 'Memori agen'], ['tampilan', 'Tampilan']];
+
+function Settings() {
+  const tab = TABS.some(([id]) => id === query.value.get('tab')) ? query.value.get('tab')! : 'panel';
+  return (
+    <div>
+      <div class="tabs" role="tablist" aria-label="Bagian pengaturan">
+        {TABS.map(([id, label]) => <button key={id} type="button" role="tab" class="chip" aria-selected={tab === id} aria-pressed={tab === id} onClick={() => navigate(`${location.pathname}?tab=${id}`)}>{label}</button>)}
+      </div>
+      {tab === 'panel' ? <PanelSettings /> : tab === 'router' ? <RouterSettings /> : tab === 'ai' ? <AiSettings /> : tab === 'memori' ? <AgentMemory /> : <LookSettings />}
+    </div>
+  );
+}
+
+type PanelInfo = { version: string; session_hours: number; poll_seconds: number; router: { host: string; port: number; user: string; tls: boolean } };
+
+function usePanelInfo() {
+  const [info, setInfo] = useState<PanelInfo | null>(null);
+  useEffect(() => { get<PanelInfo>('/api/settings/panel').then(setInfo).catch(() => {}); }, []);
+  return info;
+}
+
+function PasswordInput({ value, onInput, label, auto }: { value: string; onInput: (v: string) => void; label: string; auto: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label>{label}<span class="pw-field">
+      <input type={(show ? 'text' : 'password') as 'text'} autocomplete={auto} value={value} onInput={e => onInput((e.target as HTMLInputElement).value)} required />
+      <button type="button" class="ghost pw-eye" aria-label={show ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'} aria-pressed={show} onClick={() => setShow(v => !v)}>{show ? 'Sembunyikan' : 'Lihat'}</button>
+    </span></label>
+  );
+}
+
+function PanelSettings() {
+  const info = usePanelInfo();
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const save = async (e: Event) => {
+    e.preventDefault();
+    if (next !== again) { setMsg({ ok: false, text: 'Kata sandi baru dan ulangannya belum sama.' }); return; }
+    if (next.length < 10) { setMsg({ ok: false, text: 'Kata sandi baru minimal 10 karakter.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/settings/password', { current: cur, new: next });
+      setCur(''); setNext(''); setAgain('');
+      setMsg({ ok: true, text: 'Kata sandi diganti. Perangkat lain yang sedang masuk sudah dikeluarkan.' });
+    } catch (err) { setMsg({ ok: false, text: (err as Error).message }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Panel</h2>
+      <dl class="facts">
+        <dt>Versi</dt><dd>{info ? `v${info.version}` : '…'}</dd>
+        <dt>Tetap masuk selama</dt><dd>{info ? `${info.session_hours} jam (diatur di config server)` : '…'}</dd>
+      </dl>
+      <form class="stack" onSubmit={save}>
+        <h3 class="sub-title">Ganti kata sandi admin</h3>
+        <PasswordInput label="Kata sandi sekarang" value={cur} onInput={setCur} auto="current-password" />
+        <PasswordInput label="Kata sandi baru (minimal 10 karakter)" value={next} onInput={setNext} auto="new-password" />
+        <PasswordInput label="Ulangi kata sandi baru" value={again} onInput={setAgain} auto="new-password" />
+        <div class="row"><button type="submit" disabled={busy}>{busy ? 'Menyimpan…' : 'Ganti kata sandi'}</button></div>
+        {msg && <p class={msg.ok ? 'notice' : 'alert'} role="status">{msg.text}</p>}
+      </form>
+    </div>
+  );
+}
+
+function RouterSettings() {
+  const info = usePanelInfo();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const test = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/router/refresh');
+      const h = await get<{ router: { ok: boolean; identity?: string; error?: string } }>('/api/health');
+      setMsg(h.router.ok ? { ok: true, text: `Tersambung ke router “${h.router.identity}”. Data pelanggan sudah diperbarui.` } : { ok: false, text: h.router.error ?? 'Router tidak menjawab.' });
+      void refreshDashboard();
+    } catch (err) { setMsg({ ok: false, text: (err as Error).message }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Router</h2>
+      <dl class="facts">
+        <dt>Alamat</dt><dd>{info ? `${info.router.host}:${info.router.port}` : '…'}</dd>
+        <dt>User API</dt><dd>{info?.router.user ?? '…'}</dd>
+        <dt>Koneksi</dt><dd>{info ? (info.router.tls ? 'API-SSL (terenkripsi)' : 'API biasa (tidak terenkripsi)') : '…'}</dd>
+        <dt>Sinkron tiap</dt><dd>{info ? `${info.poll_seconds} detik` : '…'}</dd>
+      </dl>
+      <div class="row"><button type="button" onClick={test} disabled={busy}>{busy ? 'Menguji…' : 'Tes koneksi'}</button></div>
+      {msg && <p class={msg.ok ? 'notice' : 'alert'} role="status">{msg.text}</p>}
+      <p class="muted small">Alamat dan sandi router diubah di file config server (/etc/mikrotik-panel/config.toml), lalu restart panel.</p>
+    </div>
+  );
+}
+
+function LookSettings() {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const reset = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await post('/api/design/reset');
+      await post('/api/design/apply');
+      setMsg('Tampilan bawaan dipasang lagi. Versi sebelumnya tetap tersimpan dan bisa dikembalikan lewat agen (/undo).');
+      setConfirming(false);
+    } catch (err) { setMsg((err as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div class="stack">
+      <h2 class="block-title">Tampilan</h2>
+      <p class="muted">Kalau tampilan jadi berantakan setelah diubah agen, kembalikan ke tampilan bawaan di sini.</p>
+      {confirming ? (
+        <div class="confirm"><p>Ganti tampilan sekarang dengan tampilan bawaan?</p>
+          <div class="row"><button type="button" class="danger" onClick={reset} disabled={busy}>{busy ? 'Memasang…' : 'Ya, kembalikan'}</button><button type="button" class="ghost" onClick={() => setConfirming(false)} disabled={busy}>Batal</button></div>
+        </div>
+      ) : <div class="row"><button type="button" class="ghost" onClick={() => setConfirming(true)}>Kembalikan tampilan bawaan</button></div>}
+      {msg && <p class="notice" role="status">{msg}</p>}
+      <p class="muted small">Tidak bisa membuka halaman ini sama sekali? Buka <a href="/?design=default" onClick={e => { e.preventDefault(); location.assign('/?design=default'); }}>mode darurat</a> (tampilan bawaan tanpa mengubah apa pun).</p>
     </div>
   );
 }

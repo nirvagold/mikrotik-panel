@@ -33,6 +33,25 @@ pub enum RouterError {
     Protocol,
 }
 
+impl RouterError {
+    /// Penjelasan untuk admin: apa artinya dan apa yang bisa dilakukan.
+    pub fn hint(&self) -> String {
+        match self {
+            RouterError::Io(e) => match e.kind() {
+                std::io::ErrorKind::ConnectionRefused => "Router menolak sambungan ke port API. Pastikan layanan api (8728) atau api-ssl (8729) aktif di IP > Services, dan IP server panel termasuk di Available From.".into(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => "Sambungan ke router terputus di tengah jalan. Biasanya karena router reboot atau jaringan putus sesaat; panel mencoba lagi otomatis.".into(),
+                _ => format!("Panel tidak bisa menyambung ke router ({e}). Periksa jaringan antara server panel dan router."),
+            },
+            RouterError::Timeout => "Router tidak menjawab tepat waktu. Periksa apakah router menyala, jaringan ke router, atau firewall yang memblokir port API.".into(),
+            RouterError::Login(_) => "Router menolak login panel. Periksa user dan kata sandi router di konfigurasi panel, serta grup user itu punya izin api.".into(),
+            RouterError::Trap(m) => format!("Router menolak perintah: {m}."),
+            RouterError::Fatal(_) => "Router memutus sesi API panel. Coba lagi; bila terus terjadi, cek log router.".into(),
+            RouterError::Invalid(m) => format!("Perintah tidak valid: {m}."),
+            RouterError::Protocol => "Jawaban router tidak bisa dibaca. Pastikan port yang dipakai adalah port API RouterOS, bukan Winbox atau web.".into(),
+        }
+    }
+}
+
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 
@@ -208,6 +227,11 @@ impl Command {
     pub fn path(&self) -> &str {
         &self.words[0]
     }
+
+    /// Perintah baca (aman diulang): `.../print` atau `.../getall`.
+    pub fn is_read(&self) -> bool {
+        matches!(self.words[0].rsplit('/').next(), Some("print" | "getall"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -258,21 +282,63 @@ impl RouterOs {
     }
 
     /// Jalankan perintah dan proses baris satu per satu (untuk hasil besar, tanpa batas 8 MB).
+    ///
+    /// Koneksi lama bisa sudah diputus router tanpa ketahuan. Perintah baca diulang sekali di
+    /// koneksi baru, tetapi hanya bila belum ada baris yang diteruskan (supaya tidak terhitung
+    /// dobel). Perintah ubah tidak pernah diulang setelah terkirim: koneksi lama dicek dulu
+    /// dengan perintah baca kecil, lalu perintah ubah dikirim tepat satu kali.
     pub async fn each(
         &self,
         cmd: &Command,
         on_row: &mut (dyn FnMut(Row) + Send),
     ) -> Result<Row, RouterError> {
         let mut guard = self.conn.lock().await;
+        if !cmd.is_read() {
+            if guard.is_some() {
+                let probe = Command::new("/system/identity/print")?;
+                let mut ignore = |_: Row| {};
+                Self::run_read(self, &mut *guard, &probe, &mut ignore).await?;
+            }
+            if guard.is_none() {
+                *guard = Some(self.connect().await?);
+            }
+            let conn = guard.as_mut().expect("koneksi ada");
+            return match tokio::time::timeout(CALL_TIMEOUT, conn.call(&cmd.words, on_row)).await {
+                Ok(Ok(done)) => Ok(done),
+                Ok(Err(e @ (RouterError::Trap(_) | RouterError::Invalid(_)))) => Err(e),
+                Ok(Err(e)) => {
+                    *guard = None;
+                    Err(e)
+                }
+                Err(_) => {
+                    *guard = None;
+                    Err(RouterError::Timeout)
+                }
+            };
+        }
+        Self::run_read(self, &mut *guard, cmd, on_row).await
+    }
+
+    async fn run_read(
+        &self,
+        guard: &mut Option<Conn>,
+        cmd: &Command,
+        on_row: &mut (dyn FnMut(Row) + Send),
+    ) -> Result<Row, RouterError> {
+        let mut delivered = 0usize;
         for attempt in 0..2 {
             if guard.is_none() {
                 *guard = Some(self.connect().await?);
             }
             let conn = guard.as_mut().expect("koneksi ada");
-            match tokio::time::timeout(CALL_TIMEOUT, conn.call(&cmd.words, on_row)).await {
+            let mut counted = |row: Row| {
+                delivered += 1;
+                on_row(row)
+            };
+            match tokio::time::timeout(CALL_TIMEOUT, conn.call(&cmd.words, &mut counted)).await {
                 Ok(Ok(done)) => return Ok(done),
                 Ok(Err(e @ (RouterError::Trap(_) | RouterError::Invalid(_)))) => return Err(e),
-                Ok(Err(RouterError::Io(_))) if attempt == 0 => *guard = None,
+                Ok(Err(RouterError::Io(_))) if attempt == 0 && delivered == 0 => *guard = None,
                 Ok(Err(e)) => {
                     *guard = None;
                     return Err(e);
@@ -339,6 +405,94 @@ async fn login(conn: &mut Conn, user: &str, password: &str) -> Result<(), Router
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Router yang memutus koneksi pertama di tengah jawaban; koneksi berikutnya normal.
+    async fn flaky_router(
+        cut_after_rows: usize,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let writes = std::sync::Arc::new(AtomicUsize::new(0));
+        let w2 = writes.clone();
+        tokio::spawn(async move {
+            let mut first = true;
+            while let Ok((sock, _)) = listener.accept().await {
+                let cut = std::mem::replace(&mut first, false);
+                let writes = w2.clone();
+                tokio::spawn(async move {
+                    let mut c = Conn { io: BufReader::new(Box::new(sock)) };
+                    while let Ok(words) = c.read_sentence().await {
+                        let w = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+                        if words[0] == "/login" {
+                            c.write_sentence(&w(&["!done"])).await.unwrap();
+                            continue;
+                        }
+                        if !words[0].ends_with("/print") {
+                            writes.fetch_add(1, Ordering::SeqCst);
+                            if cut {
+                                return;
+                            }
+                            c.write_sentence(&w(&["!done", "=ret=*9"])).await.unwrap();
+                            continue;
+                        }
+                        for i in 0..3 {
+                            if cut && i == cut_after_rows {
+                                return;
+                            }
+                            c.write_sentence(&w(&["!re", &format!("=n={i}")])).await.unwrap();
+                        }
+                        c.write_sentence(&w(&["!done"])).await.unwrap();
+                    }
+                });
+            }
+        });
+        (port, writes)
+    }
+
+    fn target(port: u16) -> RouterOs {
+        RouterOs::new(RouterTarget {
+            host: "127.0.0.1".into(),
+            port,
+            user: "u".into(),
+            password: "p".into(),
+            tls_fingerprint: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn read_cut_midway_is_not_counted_twice() {
+        let (port, _) = flaky_router(1).await;
+        let r = target(port);
+        let mut n = 0;
+        let res = r.each(&Command::new("/x/print").unwrap(), &mut |_| n += 1).await;
+        assert!(res.is_err());
+        assert_eq!(n, 1, "baris yang sudah diteruskan tidak boleh diulang");
+        // Koneksi berikutnya normal.
+        let rows = r.call(&Command::new("/x/print").unwrap()).await.unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn read_cut_before_rows_is_retried() {
+        let (port, _) = flaky_router(0).await;
+        let rows = target(port).call(&Command::new("/x/print").unwrap()).await.unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn write_is_sent_once_even_if_connection_drops() {
+        use std::sync::atomic::Ordering;
+        let (port, writes) = flaky_router(0).await;
+        let r = target(port);
+        let res = r.call(&Command::new("/x/add").unwrap().arg("name", "a").unwrap()).await;
+        assert!(res.is_err());
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        // Koneksi yang dipakai ulang dicek dulu, lalu perintah ubah terkirim satu kali.
+        r.call(&Command::new("/x/print").unwrap()).await.unwrap();
+        r.call(&Command::new("/x/add").unwrap()).await.unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 2);
+    }
 
     #[tokio::test]
     async fn length_encoding_roundtrip() {

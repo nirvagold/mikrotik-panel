@@ -17,7 +17,7 @@ export type Dashboard = {
 
 export const dashboard = signal<Dashboard | null>(null);
 export const historyDays = signal(7);
-export const routerStatus = signal<{ ok: boolean; error?: string }>({ ok: true });
+export const routerStatus = signal<{ ok: boolean; error?: string; hint?: string }>({ ok: true });
 export const loadError = signal<string | null>(null);
 
 export const lowQuota = computed(() =>
@@ -26,10 +26,16 @@ export const lowQuota = computed(() =>
     .sort((a, b) => a.remaining! / a.limit! - b.remaining! / b.limit!));
 
 let pending: Promise<void> | null = null;
+let pendingDays = 0;
 
 export function refreshDashboard(): Promise<void> {
-  pending ??= get<Dashboard>(`/api/dashboard?days=${historyDays.value}`)
-    .then(d => { dashboard.value = d; loadError.value = null; })
+  // Permintaan yang sedang jalan dipakai bersama, kecuali periode grafik sudah diganti
+  // (7 ↔ 30 hari): saat itu muat ulang setelahnya supaya grafik sesuai pilihan.
+  if (pending && pendingDays !== historyDays.value) return pending.then(() => refreshDashboard());
+  if (pending) return pending;
+  const days = (pendingDays = historyDays.value);
+  pending = get<Dashboard>(`/api/dashboard?days=${days}`)
+    .then(d => { if (days === historyDays.value) { dashboard.value = d; loadError.value = null; } })
     .catch(e => { loadError.value = e.message; })
     .finally(() => { pending = null; });
   return pending;
@@ -37,7 +43,7 @@ export function refreshDashboard(): Promise<void> {
 
 export function startData() {
   on('telemetry.update', () => void refreshDashboard());
-  on('router.status', (s: { ok: boolean; error?: string }) => { routerStatus.value = s; });
+  on('router.status', (s: { ok: boolean; error?: string; hint?: string }) => { routerStatus.value = s; });
   on('resync', () => void refreshDashboard());
   void refreshDashboard();
 }

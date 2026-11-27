@@ -332,10 +332,17 @@ async fn send(State(st): State<Shared>, Json(b): Json<SendBody>) -> Response {
         .filter(|c| !c.is_empty())
         .unwrap_or_else(random_token);
     let Some((run_id, token)) = st.runs.start(&conv) else {
-        return fail(
+        let other = st.runs.current_conversation();
+        let msg = if other.as_deref() == Some(conv.as_str()) {
+            "Agen masih mengerjakan permintaan sebelumnya. Tekan Stop atau tunggu."
+        } else {
+            "Agen sedang mengerjakan percakapan lain. Buka percakapan itu untuk melihat atau menghentikannya."
+        };
+        return (
             StatusCode::CONFLICT,
-            "Agen masih mengerjakan permintaan sebelumnya. Tekan Stop atau tunggu.",
-        );
+            Json(json!({ "error": msg, "conversation_id": other })),
+        )
+            .into_response();
     };
     let (c2, replace) = (conv.clone(), b.replace_from.clone());
     let prepared = st
@@ -389,11 +396,22 @@ async fn send(State(st): State<Shared>, Json(b): Json<SendBody>) -> Response {
     };
     let (state, conv2, rid) = (st.clone(), conv.clone(), run_id.clone());
     tokio::spawn(async move {
+        // Penanda "agen bekerja" selalu dilepas, juga bila giliran ini panik atau melewati batas waktu.
+        let _release = RunRelease(state.clone(), rid.clone(), conv2.clone());
         let host = AppHost {
             state: state.clone(),
             cipher,
         };
-        let outcome = run_turn(&host, &conv2, &text, &token).await;
+        let outcome = match tokio::time::timeout(RUN_LIMIT, run_turn(&host, &conv2, &text, &token)).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                token.cancel();
+                let msg = "Agen dihentikan karena bekerja lebih dari 15 menit. Coba pecah permintaan jadi lebih kecil.";
+                state.hub.publish("chat.done", json!({ "conversation": conv2, "ended": "Error", "design_version": null, "error": msg }));
+                tracing::warn!("giliran agen melewati batas waktu");
+                return;
+            }
+        };
         if let Some(version) = outcome.design_version.clone() {
             let c3 = conv2.clone();
             let _ = state
@@ -410,9 +428,23 @@ async fn send(State(st): State<Shared>, Json(b): Json<SendBody>) -> Response {
         if let Ended::Error(m) = &outcome.ended {
             tracing::warn!("giliran agen gagal: {m}");
         }
-        state.runs.finish(&rid);
     });
     Json(json!({ "conversation_id": conv, "run_id": run_id, "messages": msgs })).into_response()
+}
+
+/// Batas waktu satu giliran agen.
+const RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+struct RunRelease(Shared, String, String);
+
+impl Drop for RunRelease {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.hub.publish("chat.done", json!({ "conversation": self.2, "ended": "Error", "design_version": null,
+                "error": "Agen berhenti karena kesalahan di panel. Coba kirim ulang." }));
+        }
+        self.0.runs.finish(&self.1);
+    }
 }
 
 async fn cancel(State(st): State<Shared>, Path(id): Path<String>) -> Response {
@@ -440,6 +472,16 @@ async fn set_status(
     Ok(card)
 }
 
+/// Ubah status dari "pending" secara atomik. `false` bila usulan sudah diproses permintaan lain.
+async fn claim_pending(st: &Shared, id: &str, status: &str) -> anyhow::Result<bool> {
+    let (i, s) = (id.to_string(), status.to_string());
+    let n = st
+        .store
+        .run(move |c| c.execute("UPDATE agent_proposals SET status = ?1, decided_at = ?2 WHERE id = ?3 AND status = 'pending'", (s, now(), i)))
+        .await?;
+    Ok(n == 1)
+}
+
 async fn approve(
     State(st): State<Shared>,
     Path(id): Path<String>,
@@ -462,8 +504,15 @@ async fn approve(
             format!("Ketik \"{label}\" untuk mengonfirmasi tindakan kritis ini."),
         );
     }
-    if let Err(err) = set_status(&st, &id, "approved", None).await {
-        return internal(err);
+    // Klaim atomik: ketukan dobel atau dua perangkat tidak bisa menjalankan usulan yang sama dua kali.
+    let _busy = crate::inflight::claim(format!("approve:{id}"));
+    match claim_pending(&st, &id, "approved").await {
+        Ok(true) => {}
+        Ok(false) => return fail(StatusCode::CONFLICT, "Usulan ini sudah diproses."),
+        Err(err) => return internal(err),
+    }
+    if let Ok(card) = load_card(&st, &id).await {
+        st.hub.publish("proposal.updated", json!({ "card": card }));
     }
     let tool = card["tool"].as_str().unwrap_or_default().to_string();
     let service = service_command(&card["input"]);
@@ -561,6 +610,9 @@ async fn set_service_address(st: &Shared, cmd: &PolicyCommand) -> Result<(String
 
 /// Kembalikan Available From ke nilai sebelum usulan ini dijalankan (dengan pengaman yang sama).
 async fn revert_proposal(State(st): State<Shared>, Path(id): Path<String>) -> Response {
+    let Some(_busy) = crate::inflight::claim(format!("proposal-revert:{id}")) else {
+        return fail(StatusCode::CONFLICT, "Pengembalian ini sedang diproses.");
+    };
     let card = match load_card(&st, &id).await {
         Ok(c) => c,
         Err(_) => return fail(StatusCode::NOT_FOUND, "Usulan tidak ditemukan."),
@@ -591,6 +643,11 @@ async fn revert_proposal(State(st): State<Shared>, Path(id): Path<String>) -> Re
 }
 
 async fn reject(State(st): State<Shared>, Path(id): Path<String>) -> Response {
+    match claim_pending(&st, &id, "rejected").await {
+        Ok(true) => {}
+        Ok(false) => return fail(StatusCode::CONFLICT, "Usulan ini sudah diproses."),
+        Err(err) => return internal(err),
+    }
     match set_status(&st, &id, "rejected", None).await {
         Ok(card) => Json(json!({ "card": card })).into_response(),
         Err(err) => internal(err),
@@ -652,7 +709,7 @@ async fn execute(st: &Shared, tool: &str, input: &Value) -> Result<String, Strin
     };
     let cmd: PolicyCommand =
         serde_json::from_value(raw.clone()).map_err(|e| format!("Perintah tidak valid: {e}"))?;
-    crate::actions::run_command(st, &cmd).await.map(|(msg, _)| msg)
+    crate::actions::run_command_text(st, &cmd).await.map(|(msg, _)| msg)
 }
 
 async fn ai_get(State(st): State<Shared>) -> Response {

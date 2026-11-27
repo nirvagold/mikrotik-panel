@@ -5,6 +5,7 @@ mod design_upgrade;
 mod api;
 mod events;
 mod http;
+mod inflight;
 mod migrate;
 mod poller;
 mod quota;
@@ -32,6 +33,8 @@ const USAGE: &str = "Pemakaian:
   mikrotik-panel gen-key                               buat secret_key baru
   mikrotik-panel hash-password                         hash kata sandi admin (dibaca dari stdin)
   mikrotik-panel encrypt [--config PATH]               enkripsi kata sandi router (dibaca dari stdin)
+  mikrotik-panel reset-password [--config PATH]        lupa sandi: hapus sandi yang diganti lewat panel,
+                                                       kembali memakai admin_password_hash di config
   mikrotik-panel router-fingerprint [--config PATH]    tampilkan sidik jari sertifikat API-SSL router
   mikrotik-panel migrate --from PANEL.sqlite3 [--old-config private.json] [--config PATH]
                                                        pindahkan data panel lama (sekali saja)";
@@ -119,6 +122,21 @@ fn main() -> anyhow::Result<()> {
             let config = Config::load(&args.config)?;
             let cipher = Cipher::from_base64(&config.secret_key)?;
             println!("{}", cipher.encrypt(&read_secret("Kata sandi router: ")?));
+            Ok(())
+        }
+        "reset-password" => {
+            let config = Config::load(&args.config)?;
+            let conn = rusqlite::Connection::open(&config.database)?;
+            let n = conn.execute("DELETE FROM settings WHERE key = 'admin_password_hash'", [])?;
+            conn.execute("DELETE FROM admin_sessions", []).ok();
+            println!(
+                "{}",
+                if n > 0 {
+                    "Sandi dari panel dihapus. Masuk memakai sandi di config (admin_password_hash), lalu restart panel: systemctl restart mikrotik-panel"
+                } else {
+                    "Tidak ada sandi yang diganti lewat panel; sandi di config sudah berlaku."
+                }
+            );
             Ok(())
         }
         "router-fingerprint" => {
@@ -222,6 +240,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
         runs: Default::default(),
         config,
     });
+    restore_after_restart(&state).await;
     poller::spawn(state.clone());
     snapshots::spawn(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
@@ -237,4 +256,44 @@ async fn run(config: Config) -> anyhow::Result<()> {
     })
     .await?;
     Ok(())
+}
+
+/// Setelah panel menyala: pulihkan sesi login, dan tandai pekerjaan yang terputus oleh restart
+/// supaya tidak tertahan selamanya di "sedang dijalankan" / "Menunggu verifikasi".
+async fn restore_after_restart(state: &http::Shared) {
+    let now = store::now();
+    let restored = state
+        .store
+        .run(move |c| {
+            c.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [now])?;
+            let mut s = c.prepare("SELECT token_hash, csrf, expires_at FROM admin_sessions")?;
+            let rows = s
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let cards = c.execute(
+                "UPDATE agent_proposals SET status = 'failed', result = 'Terputus karena panel dinyalakan ulang. Cek hasilnya di router sebelum mencoba lagi.', decided_at = ?1 WHERE status = 'approved'",
+                [now],
+            )?;
+            let audits = c.execute(
+                "UPDATE audit SET status = 'Terputus (panel restart), cek ulang di router' WHERE status = 'Menunggu verifikasi'",
+                [],
+            )?;
+            Ok((rows, cards, audits))
+        })
+        .await;
+    match restored {
+        Ok((rows, cards, audits)) => {
+            let n = rows.len();
+            for (hash, csrf, expires) in rows {
+                state.sessions.restore(hash, csrf, expires.max(0) as u64);
+            }
+            if n > 0 {
+                tracing::info!("{n} sesi login dipulihkan");
+            }
+            if cards + audits > 0 {
+                tracing::warn!("{cards} usulan dan {audits} riwayat terputus oleh restart ditandai");
+            }
+        }
+        Err(e) => tracing::warn!("gagal memulihkan keadaan setelah restart: {e}"),
+    }
 }

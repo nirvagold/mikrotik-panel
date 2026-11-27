@@ -9,7 +9,19 @@ import { on } from './events';
 type Props<K extends Block['kind']> = { block: Extract<Block, { kind: K }> };
 
 function Waiting() {
+  // Pertama kali dipakai / router belum tersambung: jelaskan langkahnya, jangan "Memuat…" selamanya.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSlow(true), 12000); return () => clearTimeout(t); }, []);
   if (loadError.value) return <p class="muted">Data gagal dimuat: {loadError.value}</p>;
+  if (!routerStatus.value.ok || slow) return (
+    <div class="muted stack">
+      <p>Belum ada data dari router.{routerStatus.value.hint ? ` ${routerStatus.value.hint}` : ''}</p>
+      <ol class="small">
+        <li>Buka <a href="/pengaturan?tab=router">Pengaturan → Router</a> dan tekan <b>Tes koneksi</b>.</li>
+        <li>Atur penyedia AI di <a href="/pengaturan?tab=ai">Pengaturan → AI</a> supaya agen bisa membantu.</li>
+      </ol>
+    </div>
+  );
   return <p class="muted">Memuat data…</p>;
 }
 
@@ -134,28 +146,70 @@ function cell(c: Customer, col: string) {
   }
 }
 
+type Filter = 'all' | 'online' | 'offline' | 'low' | 'disabled';
+const FILTERS: [Filter, string][] = [['all', 'Semua'], ['online', 'Online'], ['offline', 'Offline'], ['low', 'Kuota menipis'], ['disabled', 'Nonaktif']];
+const SORTABLE: Record<string, (c: Customer) => string | number> = {
+  name: c => c.name.toLowerCase(), status: c => (c.disabled ? 2 : c.online ? 0 : 1), address: c => c.address ?? '',
+  profile: c => c.profile ?? '', used: c => c.used ?? -1, remaining: c => c.remaining ?? Infinity, limit: c => c.limit ?? -1,
+  uptime: c => c.uptime ?? '',
+};
+
+function matches(c: Customer, f: Filter): boolean {
+  switch (f) {
+    case 'online': return c.online;
+    case 'offline': return !c.online && !c.disabled;
+    case 'low': return lowQuota.value.includes(c);
+    case 'disabled': return c.disabled;
+    default: return true;
+  }
+}
+
 export function CustomerTable({ block }: Props<'customer_table'>) {
   const [q, setQ] = useState('');
+  const initial: Filter = block.props.filter === 'online' ? 'online' : block.props.filter === 'offline' ? 'offline' : block.props.filter === 'low_quota' ? 'low' : 'all';
+  const [f, setF] = useState<Filter>(initial);
+  const [sort, setSort] = useState<{ col: string; dir: 1 | -1 }>({ col: 'name', dir: 1 });
   if (!dashboard.value) return <Waiting />;
-  const { filter, columns, row_limit, title } = block.props;
+  const { columns, row_limit, title } = block.props;
   const needle = q.trim().toLowerCase();
-  const rows = dashboard.value.customers
-    .filter(c => filter === 'online' ? c.online : filter === 'offline' ? !c.online : filter === 'low_quota' ? lowQuota.value.includes(c) : true)
-    .filter(c => !needle || `${c.name} ${c.address ?? ''} ${c.profile ?? ''}`.toLowerCase().includes(needle));
+  const all = dashboard.value.customers;
+  const key = SORTABLE[sort.col] ?? SORTABLE.name;
+  const rows = all
+    .filter(c => matches(c, f))
+    .filter(c => !needle || `${c.name} ${c.address ?? ''} ${c.profile ?? ''}`.toLowerCase().includes(needle))
+    .slice()
+    .sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * sort.dir; });
+  const shown = rows.slice(0, row_limit);
+  const toggleSort = (col: string) => setSort(s => ({ col, dir: s.col === col ? (s.dir === 1 ? -1 : 1) : 1 }));
+  const href = (c: Customer) => `/pelanggan?akun=${encodeURIComponent(c.name)}`;
   return (
     <div>
       <div class="block-head">
         <h2 class="block-title">{title}</h2>
         <input class="search" type="search" placeholder="Cari nama, IP, profil" value={q} onInput={e => setQ((e.target as HTMLInputElement).value)} aria-label="Cari pelanggan" />
       </div>
-      <div class="table-wrap">
+      <div class="chips" role="group" aria-label="Saring pelanggan">
+        {FILTERS.map(([id, label]) => <button key={id} type="button" class="chip" aria-pressed={f === id} onClick={() => setF(id)}>{label}<b>{all.filter(c => matches(c, id)).length}</b></button>)}
+      </div>
+      <div class="table-wrap cust-table">
         <table>
-          <thead><tr>{columns.map(col => <th key={col}>{COLUMN_LABELS[col] ?? col}</th>)}</tr></thead>
+          <thead><tr>{columns.map(col => SORTABLE[col]
+            ? <th key={col} class="sortable" aria-sort={sort.col === col ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'} onClick={() => toggleSort(col)}>{COLUMN_LABELS[col] ?? col}{sort.col === col ? (sort.dir === 1 ? ' ↑' : ' ↓') : ''}</th>
+            : <th key={col}>{COLUMN_LABELS[col] ?? col}</th>)}</tr></thead>
           <tbody>
-            {rows.slice(0, row_limit).map(c => <tr key={c.name}>{columns.map(col => <td key={col} data-col={col}>{cell(c, col)}</td>)}</tr>)}
+            {shown.map(c => <tr key={c.name}>{columns.map(col => <td key={col} data-col={col}>{cell(c, col)}</td>)}</tr>)}
           </tbody>
         </table>
       </div>
+      <ul class="cust-cards">
+        {shown.map(c => (
+          <li key={c.name}><a href={href(c)}>
+            <span class="cc-name">{c.name}</span>{cell(c, 'status')}
+            <span class="cc-meta">{c.profile ?? 'tanpa profil'}{c.limit ? <>{cell(c, 'used')}<span>sisa {c.approximate ? 'perkiraan' : gib(c.remaining)}</span></> : <span>terpakai {gib(c.used)}</span>}</span>
+          </a></li>
+        ))}
+      </ul>
+      {rows.length === 0 && <p class="muted">Tidak ada pelanggan yang cocok.</p>}
       <p class="muted">{rows.length > row_limit ? `Menampilkan ${row_limit} dari ${rows.length}` : `${rows.length} pelanggan`}</p>
     </div>
   );
@@ -196,7 +250,7 @@ export function RouterStatus(_: Props<'router_status'>) {
   return (
     <div>
       <h2 class="block-title">Status router</h2>
-      {!routerStatus.value.ok && <p class="alert">Router tidak terjangkau: {routerStatus.value.error}</p>}
+      {!routerStatus.value.ok && <p class="alert">{routerStatus.value.hint ?? `Router tidak terjangkau: ${routerStatus.value.error ?? ''}`}</p>}
       <dl class="facts">{rows.map(([k, v]) => <><dt>{k}</dt><dd>{v}</dd></>)}</dl>
       <h3 class="sub-title">Interface ethernet</h3>
       <div class="table-wrap">
@@ -396,8 +450,8 @@ export function ActionButton({ block }: Props<'action_button'>) {
           </div>
           {info.runs.length > 0 && (
             <ul class="action-runs">{info.runs.map(r => (
-              <li key={r.id}><span class="muted">{new Date(r.at * 1000).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}</span> <code>{r.command}</code> <span class={r.result === 'done' ? '' : 'muted'}>{r.result === 'done' ? 'berhasil' : r.result === 'reverted' ? 'dikembalikan' : 'gagal'}</span>
-                {r.result === 'done' && r.revertible && <button type="button" class="link-btn" disabled={busy} onClick={() => void revert(r)}>Kembalikan</button>}
+              <li key={r.id}><span class="muted">{new Date(r.at * 1000).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}</span> <code>{r.command}</code> <span class={r.result === 'done' ? '' : 'muted'}>{r.result === 'done' ? 'berhasil' : r.result === 'reverted' ? 'dikembalikan' : r.result === 'partial' ? 'gagal sebagian' : 'gagal'}</span>
+                {(r.result === 'done' || r.result === 'partial') && r.revertible && <button type="button" class="link-btn" disabled={busy} onClick={() => void revert(r)}>Kembalikan</button>}
               </li>
             ))}</ul>
           )}
